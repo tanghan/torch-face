@@ -109,7 +109,8 @@ class CallBackModelCheckpoint(object):
 
     def __call__(self, global_step, backbone, partial_fc, ):
         if global_step > 100 and self.rank == 0:
-            path_module = os.path.join(self.output, "backbone.pth")
+            temp_save_path = "backbone-{}.pth".format(global_step)
+            path_module = os.path.join(self.output, temp_save_path)
             torch.save(backbone.module.state_dict(), path_module)
             logging.info("Pytorch Model Saved in '{}'".format(path_module))
 

@@ -26,24 +26,29 @@ def init_process(rank, world_size, args, fn):
     fn(args, rank, world_size)
 
 def run_train(args, rank, world_size):
-    batch_size = 64
+    torch.cuda.set_device(rank)
+    batch_size = args.batch_size
     train_loader, train_sampler = get_dataloader(args.data_prefix, rank, batch_size=batch_size)
     trainer = Trainer(rank, world_size, batch_size=batch_size)
+    output_dir = args.output_dir
 
-    init_logging(rank, "./")
+    init_logging(rank, output_dir)
 
-    callback_logging = CallBackLogging(50, rank, 0, batch_size, world_size, None)
-    #callback_checkpoint = CallBackModelCheckpoint(rank, cfg.output)
+    num_image = 4800000
+    num_epoch = 20
+    total_step = num_image // (batch_size * num_epoch * world_size)
+    callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
+    callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
-    global_step = 0
+    global_step = 0 
     fp16=True
 
     grad_amp = MaxClipGradScaler(batch_size, 128 * batch_size, growth_interval=100) if fp16 else None
     loss = AverageMeter()
-    for epoch in range(1, 2):
+    for epoch in range(0, num_epoch):
         train_sampler.set_epoch(epoch)
-        trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging) 
-        global_step += global_step
+        total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
+        global_step = total_step
 
 def get_dataloader(data_prefix, local_rank, batch_size=128):
     train_set = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank)
@@ -84,6 +89,7 @@ class Trainer():
         self.backbone.to(self.device)
         self.backbone = torch.nn.parallel.DistributedDataParallel(
             module=self.backbone, broadcast_buffers=False, device_ids=[self.local_rank])
+        logging.info("init network at {} finished".format(self.local_rank))
 
 
     def set_loss(self):
@@ -126,7 +132,7 @@ class Trainer():
         self.set_optimizer(lr=0.1)
 
     def train(self, epoch, global_step, train_loader, grad_amp, loss,
-            callback_logging):
+            callback_logging, callback_checkpoint):
         for step, (img, label) in enumerate(train_loader):
             features = F.normalize(self.backbone(img))
             x_grad, loss_v = self.module_partial_fc.forward_backward(label, features, self.opt_pfc)
@@ -149,7 +155,10 @@ class Trainer():
             callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
             self.scheduler_backbone.step()
             self.scheduler_pfc.step()
-        return step        
+        total_step = global_step + step
+        callback_checkpoint(total_step, self.backbone, self.module_partial_fc)
+
+        return total_step        
 
 
 def main(args):
@@ -168,7 +177,9 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train")
-    parser.add_argument("--gpu_num", type=int, default=1, help="")
+    parser.add_argument("--gpu_num", type=int, default=8, help="")
     parser.add_argument("--data_prefix", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2", help="")
+    parser.add_argument("--batch_size", type=int, default=128, help="")
+    parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
     args = parser.parse_args()
     main(args)
