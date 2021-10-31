@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
+from utils.mx_rec_utils.parse_rec_utils import unpack_fp64
 
 
 class BackgroundGenerator(threading.Thread):
@@ -83,17 +84,26 @@ class MXFaceDataset(Dataset):
         print("path imgrec: {}, path_imgidx: {}".format(path_imgrec, path_imgidx))
         self.imgrec = mx.recordio.MXIndexedRecordIO(path_imgidx, path_imgrec, 'r')
         s = self.imgrec.read_idx(0)
-        header, _ = mx.recordio.unpack(s)
-        if header.flag > 0:
-            self.header0 = (int(header.label[0]), int(header.label[1]))
-            self.imgidx = np.array(range(1, int(header.label[0])))
-        else:
-            self.imgidx = np.array(list(self.imgrec.keys))
+        header0, _ = unpack_fp64(s)
+        self.id_seq = list(range(int(header0.label[0]),
+                                 int(header0.label[1])))
 
+        self.id2range = {}
+        self.id_num = {}
+        self.imgidx = []
+        for identity in self.id_seq:
+            s = self.imgrec.read_idx(identity)
+            header, _ = unpack_fp64(s)
+            id_start, id_end = int(header.label[0]), int(header.label[1])
+            self.id2range[identity] = (id_start, id_end)
+            self.id_num[identity] = id_end - id_start
+            self.imgidx += list(range(*self.id2range[identity]))
+        
     def __getitem__(self, index):
         idx = self.imgidx[index]
         s = self.imgrec.read_idx(idx)
-        header, img = mx.recordio.unpack(s)
+        #header, img = mx.recordio.unpack(s)
+        header, img = unpack_fp64(s)
         label = header.label
         if not isinstance(label, numbers.Number):
             label = label[0]
