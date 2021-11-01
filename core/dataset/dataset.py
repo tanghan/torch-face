@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
+from core.dataset.transforms.base_transform import NormalizeTransformer, ToTensor, MirrorTransformer
 
 class BackgroundGenerator(threading.Thread):
     def __init__(self, generator, local_rank, max_prefetch=6):
@@ -72,11 +73,10 @@ class MXFaceDataset(Dataset):
     def __init__(self, data_prefix, local_rank):
         super(MXFaceDataset, self).__init__()
         self.transform = transforms.Compose(
-            [transforms.ToPILImage(),
-             transforms.RandomHorizontalFlip(),
-             transforms.ToTensor(),
-             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-             ])
+            [MirrorTransformer(),
+             NormalizeTransformer(bias=128., scale=0.078125),
+             ToTensor(),
+            ])
         self.local_rank = local_rank
         path_imgrec = "{}.rec".format(data_prefix)
         path_imgidx = "{}.idx".format(data_prefix)

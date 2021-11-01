@@ -1,29 +1,40 @@
 import os, sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
+import logging
+
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import torch.multiprocessing as mp
+
 import argparse
 
+from core.models.resnet import iresnet
+from core.dataset.eval_dataset import MXBinFaceDataset, EvalDataLoader
+import struct
 var_target = []
 
 dataset_dict = {"lfw": "/home/users/han.tang/data/public_face_data/glint/glint360k/lfw.bin"}
 
-from core.models.resnet import iresnet
 
 class Eval(object):
 
-    def __init__(self, local_rank, fp16=True, emb_size=512):
+    def __init__(self, local_rank, weight_path, fp16=True, emb_size=512):
         self.backbone = None
         self.local_rank = local_rank
         self.fp16 = fp16
         self.emb_size = emb_size
         self.device = "cuda:{}".format(local_rank)
+        self.weight_path = weight_path
+        self.prepare()
 
-    def network_init(self, weight_path):
+    def network_init(self):
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
         self.backbone.to(self.device)
 
-        self.backbone.load_state_dict()
-
+        self.backbone.load_state_dict(torch.load(self.weight_path, 
+            map_location=torch.device(self.local_rank)))
 
         self.backbone = torch.nn.parallel.DistributedDataParallel(
             module=self.backbone, broadcast_buffers=False, device_ids=[self.local_rank])
@@ -43,25 +54,9 @@ class Eval(object):
             imgs, flip_imgs = data
             out = self.backbone(imgs)
             if step % 10000 == 0:
-                print("process {}".format(step)
-            '''
-        while ba < data.shape[0]:
-            bb = min(ba + batch_size, data.shape[0])
-            count = bb - ba
-            _data = data[bb - batch_size: bb]
-            time0 = datetime.datetime.now()
-            img = ((_data / 255) - 0.5) / 0.5
-            net_out: torch.Tensor = backbone(img)
-            _embeddings = net_out.detach().cpu().numpy()
-            time_now = datetime.datetime.now()
-            diff = time_now - time0
-            time_consumed += diff.total_seconds()
-            if embeddings is None:
-                embeddings = np.zeros((data.shape[0], _embeddings.shape[1]))
-            embeddings[ba:bb, :] = _embeddings[(batch_size - count):, :]
-            ba = bb
-            '''
+                print("process {}".format(step))
             embeddings_list.append(embeddings)
+        return embeddings_list
 
 
 def build_dataset(bin_path, local_rank, batch_size):
@@ -82,8 +77,11 @@ def init_process(rank, world_size, args, fn):
 def run(args, rank, world_size):
     dataset_name = args.dataset
     bin_path = dataset_dict[dataset_name]
-    test = Eval(local_rank, emb_size=512, fp16=True)
+    test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=True)
     dataloader = build_dataset(bin_path, rank, batch_size=64)
+
+    test.eval(dataloader)
+
 
 @torch.no_grad()
 def test(data_set, backbone, batch_size, nfolds=10):
@@ -152,6 +150,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="eval")
     parser.add_argument("--dataset", type=str, default="lfw", help="")
     parser.add_argument("--gpu_num", type=int, default=2, help="")
+    parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
+    parser.add_argument("--output", type=str, default="/home/users/han.tang/data/eval/features/", help="")
     args = parser.parse_args()
     main(args)
 
