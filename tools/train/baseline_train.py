@@ -86,6 +86,7 @@ class Trainer():
 
     def network_init(self):
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
+        self.backbone.train()
         self.backbone.to(self.device)
         self.backbone = torch.nn.parallel.DistributedDataParallel(
             module=self.backbone, broadcast_buffers=False, device_ids=[self.local_rank])

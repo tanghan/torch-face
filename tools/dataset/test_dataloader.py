@@ -11,10 +11,15 @@ import torch.multiprocessing as mp
 def run(args, rank, size):
     print("rank: {}, size: {}".format(rank, size))
     data_prefix = args.data_prefix
-    dataloader = build_dataloader(data_prefix, rank, batch_size=64)
+    dataloader = build_dataloader(data_prefix, rank, batch_size=1)
     print(len(dataloader))
+    sample_idx = 0
+    total_sample_num = 10
     for data in dataloader:
-        print("rank: {}, {}".format(rank, data[1]))
+        if sample_idx > total_sample_num:
+            break
+        print(data[0].shape)
+        sample_idx += 1
 
 
 def build_dataloader(data_prefix, local_rank, batch_size):
