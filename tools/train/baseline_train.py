@@ -28,14 +28,15 @@ def init_process(rank, world_size, args, fn):
 def run_train(args, rank, world_size):
     torch.cuda.set_device(rank)
     batch_size = args.batch_size
+    sample_rate = args.sample_rate
     train_loader, train_sampler = get_dataloader(args.data_prefix, rank, batch_size=batch_size)
-    trainer = Trainer(rank, world_size, batch_size=batch_size)
     output_dir = args.output_dir
 
     init_logging(rank, output_dir)
 
     num_image = 4800000
     num_epoch = 20
+    trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate)
     total_step = num_image // (batch_size * num_epoch * world_size)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
@@ -53,7 +54,7 @@ def run_train(args, rank, world_size):
 def get_dataloader(data_prefix, local_rank, batch_size=128):
     train_set = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank)
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=False)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True)
     train_loader = DataLoaderX(
         local_rank=local_rank, dataset=train_set, batch_size=batch_size,
         sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
@@ -62,7 +63,7 @@ def get_dataloader(data_prefix, local_rank, batch_size=128):
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512):
+    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=20, sample_rate=0.1):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
@@ -76,11 +77,13 @@ class Trainer():
         self.loss_fn = None
         self.num_image = 4800000
         warmup_epoch = -1
-        num_epoch = 2
+        self.num_epoch = num_epoch
         self.fp16 = True
         self.warmup_step = self.num_image // self.total_batch_size * warmup_epoch
-        self.total_step = self.num_image // self.total_batch_size * num_epoch
+        self.total_step = self.num_image // self.total_batch_size * self.num_epoch
+        #self.decay_epoch = [30, 45, 55, 60, 65, 70]
         self.decay_epoch = [8, 12, 15, 18]
+        self.sample_rate = sample_rate
 
         self.prepare()
 
@@ -101,7 +104,7 @@ class Trainer():
         self.module_partial_fc = PartialFC(
             rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=False,
             batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes,
-            sample_rate=1., embedding_size=self.emb_size, prefix="./")
+            sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix="./")
 
     def set_optimizer(self, lr):
         def lr_step_func(current_step):
@@ -182,5 +185,6 @@ if __name__ == "__main__":
     parser.add_argument("--data_prefix", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2", help="")
     parser.add_argument("--batch_size", type=int, default=128, help="")
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
+    parser.add_argument("--sample_rate", type=float, default=0.1, help="")
     args = parser.parse_args()
     main(args)

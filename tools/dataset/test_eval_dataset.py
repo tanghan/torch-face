@@ -3,8 +3,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from utils.parse_utils import parse_eval_bin
 from core.dataset.eval_dataset import MXBinFaceDataset, EvalDataLoader
+from core.dataset.test_dataset import MXTestFaceDataset
 
 lfw_path = "/home/users/han.tang/data/public_face_data/glint/glint360k/lfw.bin"
+ijbc_rec_path = "/home/users/han.tang/data/test/ijbc_lmks_V135PNGAff.rec"
+ijbc_idx_path = "/home/users/han.tang/data/test/ijbc_lmks_V135PNGAff.idx"
 
 import torch
 import torch.multiprocessing as mp
@@ -20,6 +23,15 @@ def build_dataset(bin_path, local_rank, batch_size):
         sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
     return dataloader
 
+def build_test_dataset(rec_path, idx_path, local_rank, batch_size):
+    dataset = MXTestFaceDataset(rec_path, idx_path, local_rank)
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
+    dataloader = EvalDataLoader(
+        local_rank=local_rank, dataset=dataset, batch_size=batch_size,
+        sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
+    return dataloader
+
+
 def init_process(rank, world_size, args, fn):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12345"
@@ -28,7 +40,8 @@ def init_process(rank, world_size, args, fn):
     fn(args, rank, world_size)
 
 def run(args, rank, world_size):
-    dataloader = build_dataset(lfw_path, rank, batch_size=64)
+    #dataloader = build_dataset(lfw_path, rank, batch_size=64)
+    dataloader = build_test_dataset(ijbc_rec_path, ijbc_idx_path, rank, batch_size=64)
     for data in dataloader:
         print(data[0].shape)
 
@@ -45,8 +58,6 @@ def main(args):
     for p in processes:
         p.join()
 
-
-    #parse_eval_bin.load_bin(lfw_path, image_size=(112, 112))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")

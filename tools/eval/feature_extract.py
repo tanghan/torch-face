@@ -14,15 +14,18 @@ import argparse
 
 from core.models.resnet import iresnet
 from core.dataset.eval_dataset import MXBinFaceDataset, EvalDataLoader
+from core.dataset.test_dataset import MXTestFaceDataset
 import struct
 var_target = []
 
-dataset_dict = {"lfw": "/home/users/han.tang/data/public_face_data/glint/glint360k/lfw.bin"}
+dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint360k/lfw.bin"], 
+        "ijbc": ["/home/users/han.tang/data/test/ijbc_lmks_V135PNGAff.rec",
+                 "/home/users/han.tang/data/test/ijbc_lmks_V135PNGAff.idx"]}
 
 
 class Eval(object):
 
-    def __init__(self, local_rank, weight_path, fp16=True, emb_size=512):
+    def __init__(self, local_rank, weight_path, fp16=True, emb_size=512, flip=False):
         self.backbone = None
         self.local_rank = local_rank
         self.fp16 = fp16
@@ -49,17 +52,32 @@ class Eval(object):
     @torch.no_grad()
     def eval(self, dataloader):
         embeddings_list = []
+        label_list = []
+        index_list = []
         for step, data in enumerate(dataloader):
-            imgs, flip_imgs = data
+            if flip:
+                imgs, flip_img, label, index = data
+            else:
+                imgs, label, index = data
             out = self.backbone(imgs)
-            if step % 10000 == 0:
+            if step % 100 == 0:
                 print("process {}".format(step))
             embeddings_list.append(out)
-        return embeddings_list
+            label_list.append(label)
+            index_list.append(index)
+        return embeddings_list, label_list, index_list
 
 
 def build_dataset(bin_path, local_rank, batch_size):
     dataset = MXBinFaceDataset(bin_path, local_rank)
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
+    dataloader = EvalDataLoader(
+        local_rank=local_rank, dataset=dataset, batch_size=batch_size,
+        sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
+    return dataloader
+
+def build_rec_dataset(rec_path, idx_path, local_rank, batch_size):
+    dataset = MXTestFaceDataset(rec_path, idx_path, local_rank)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
         local_rank=local_rank, dataset=dataset, batch_size=batch_size,
@@ -77,9 +95,15 @@ def run(args, rank, world_size):
     dataset_name = args.dataset
     bin_path = dataset_dict[dataset_name]
     test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=True)
-    dataloader = build_dataset(bin_path, rank, batch_size=64)
+    if dataset_name == "ijbc":
+        dataloader = build_rec_dataset(dataset_dict[dataset_name][0],
+                dataset_dict[dataset_name][1], rank, batch_size=64)
+    elif dataset_name == "lfw":
+        dataloader = build_dataset(bin_path, rank, batch_size=64)
+    else:
+        raise AssertionError("not a good dataset name: {}".format(dataset_name))
 
-    embeddings_list = test.eval(dataloader)
+    embeddings_list, label_list, index_list = test.eval(dataloader)
 
     output = args.output 
     feature_path = "{}.bin".format(rank)
@@ -97,57 +121,6 @@ def run(args, rank, world_size):
         fw.write(raw_data)
     fw.close()
 
-
-
-@torch.no_grad()
-def test(data_set, backbone, batch_size, nfolds=10):
-    print('testing verification..')
-    data_list = data_set[0]
-    issame_list = data_set[1]
-    embeddings_list = []
-    time_consumed = 0.0
-    for i in range(len(data_list)):
-        data = data_list[i]
-        embeddings = None
-        ba = 0
-        while ba < data.shape[0]:
-            bb = min(ba + batch_size, data.shape[0])
-            count = bb - ba
-            _data = data[bb - batch_size: bb]
-            time0 = datetime.datetime.now()
-            img = ((_data / 255) - 0.5) / 0.5
-            net_out: torch.Tensor = backbone(img)
-            _embeddings = net_out.detach().cpu().numpy()
-            time_now = datetime.datetime.now()
-            diff = time_now - time0
-            time_consumed += diff.total_seconds()
-            if embeddings is None:
-                embeddings = np.zeros((data.shape[0], _embeddings.shape[1]))
-            embeddings[ba:bb, :] = _embeddings[(batch_size - count):, :]
-            ba = bb
-        embeddings_list.append(embeddings)
-
-    _xnorm = 0.0
-    _xnorm_cnt = 0
-    for embed in embeddings_list:
-        for i in range(embed.shape[0]):
-            _em = embed[i]
-            _norm = np.linalg.norm(_em)
-            _xnorm += _norm
-            _xnorm_cnt += 1
-    _xnorm /= _xnorm_cnt
-
-    acc1 = 0.0
-    std1 = 0.0
-    embeddings = embeddings_list[0] + embeddings_list[1]
-    embeddings = sklearn.preprocessing.normalize(embeddings)
-    print(embeddings.shape)
-    print('infer time', time_consumed)
-    _, _, accuracy, val, val_std, far = evaluate(embeddings, issame_list, nrof_folds=nfolds)
-    acc2, std2 = np.mean(accuracy), np.std(accuracy)
-    return acc1, std1, acc2, std2, _xnorm, embeddings_list
-
-
 def main(args):
     gpu_num = args.gpu_num
     size = gpu_num
@@ -164,7 +137,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="eval")
-    parser.add_argument("--dataset", type=str, default="lfw", help="")
+    parser.add_argument("--dataset", type=str, default="ijbc", help="")
     parser.add_argument("--gpu_num", type=int, default=2, help="")
     parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
     parser.add_argument("--output", type=str, default="/home/users/han.tang/data/eval/features/", help="")

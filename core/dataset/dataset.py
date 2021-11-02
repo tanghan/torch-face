@@ -70,13 +70,21 @@ class DataLoaderX(DataLoader):
 
 
 class MXFaceDataset(Dataset):
-    def __init__(self, data_prefix, local_rank):
+    def __init__(self, data_prefix, local_rank, origin_preprocess=False):
         super(MXFaceDataset, self).__init__()
-        self.transform = transforms.Compose(
-            [MirrorTransformer(),
-             NormalizeTransformer(bias=128., scale=0.078125),
-             ToTensor(),
-            ])
+        if origin_preprocess:
+            self.transform = transforms.Compose(
+                [transforms.ToPILImage(),
+                 transforms.RandomHorizontalFlip(),
+                 transforms.ToTensor(),
+                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+                 ])
+        else:
+            self.transform = transforms.Compose(
+                [MirrorTransformer(),
+                 NormalizeTransformer(bias=128., scale=0.078125),
+                 ToTensor(),
+                ])
         self.local_rank = local_rank
         path_imgrec = "{}.rec".format(data_prefix)
         path_imgidx = "{}.idx".format(data_prefix)
