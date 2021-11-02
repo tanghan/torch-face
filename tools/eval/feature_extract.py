@@ -108,7 +108,12 @@ def run(args, rank, world_size):
     output = args.output 
     feature_path = "{}.bin".format(rank)
     feature_path = os.path.join(output, feature_path)
-    print(feature_path)
+    label_path = "{}_label.txt".format(rank)
+    label_path = os.path.join(output, label_path)
+
+    with open(label_path, "w") as fw:
+        for label, index in zip(label_list, index_list):
+            fw.writelines("{} {}\n".format(label, index))
 
     fw = open(feature_path, "ab")
 
