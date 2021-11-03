@@ -71,17 +71,32 @@ class DataLoaderX(DataLoader):
 
 
 class MXFaceDataset(Dataset):
-    def __init__(self, data_prefix, local_rank):
+    def __init__(self, rec_path, idx_path, local_rank, origin_preprocess=False, training=True):
         super(MXFaceDataset, self).__init__()
+        self.training = training
+
+        base_transforms = [] 
+        if origin_preprocess:
+            base_transforms.append(transforms.ToPILImage())
+            if training:
+                base_transforms.append(transforms.RandomHorizontalFlip())
+
+            base_transforms.append(transforms.ToTensor())
+            base_transforms.append(transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
+        else:
+            if training:
+                base_transforms.append(MirrorTransformer())
+            base_transforms.append(NormalizeTransformer(bias=128., scale=0.078125))
+            base_transforms.append(ToTensor())
+
         self.transform = transforms.Compose(
-            [MirrorTransformer(),
-             NormalizeTransformer(bias=128., scale=0.078125),
-             ToTensor(),
-             ])
+                base_transforms
+                         )
+
         self.local_rank = local_rank
-        path_imgrec = "{}.rec".format(data_prefix)
-        path_imgidx = "{}.idx".format(data_prefix)
-        print("path imgrec: {}, path_imgidx: {}".format(path_imgrec, path_imgidx))
+        path_imgrec = rec_path
+        path_imgidx = idx_path
+        print("path imgrec: {}, path_imgidx: {}, is training: {}, use origin preprocess: {}".format(path_imgrec, path_imgidx, training, origin_preprocess))
         self.imgrec = mx.recordio.MXIndexedRecordIO(path_imgidx, path_imgrec, 'r')
         s = self.imgrec.read_idx(0)
         header0, _ = unpack_fp64(s)

@@ -29,7 +29,7 @@ def run_train(args, rank, world_size):
     torch.cuda.set_device(rank)
     batch_size = args.batch_size
     sample_rate = args.sample_rate
-    train_loader, train_sampler = get_dataloader(args.data_prefix, rank, batch_size=batch_size)
+    train_loader, train_sampler = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size)
     output_dir = args.output_dir
 
     init_logging(rank, output_dir)
@@ -51,8 +51,8 @@ def run_train(args, rank, world_size):
         total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
         global_step = total_step
 
-def get_dataloader(data_prefix, local_rank, batch_size=128):
-    train_set = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank)
+def get_dataloader(rec_path, idx_path, local_rank, batch_size=128):
+    train_set = MXFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True)
     train_loader = DataLoaderX(
@@ -182,7 +182,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train")
     parser.add_argument("--gpu_num", type=int, default=8, help="")
-    parser.add_argument("--data_prefix", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2", help="")
+    parser.add_argument("--rec_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.rec", help="")
+    parser.add_argument("--idx_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx", help="")
     parser.add_argument("--batch_size", type=int, default=128, help="")
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
     parser.add_argument("--sample_rate", type=float, default=0.1, help="")

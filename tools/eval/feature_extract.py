@@ -15,17 +15,22 @@ import argparse
 from core.models.resnet import iresnet
 from core.dataset.eval_dataset import MXBinFaceDataset, EvalDataLoader
 from core.dataset.test_dataset import MXTestFaceDataset
+from core.dataset.baseline_dataset import MXFaceDataset
+
 import struct
+from collections import defaultdict
 var_target = []
 
 dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint360k/lfw.bin"], 
         "ijbc": ["/home/users/han.tang/data/test/ijbc/ijbc_lmks_V135PNGAff.rec",
-                 "/home/users/han.tang/data/test/ijbc/ijbc_lmks_V135PNGAff.idx"]}
+                 "/home/users/han.tang/data/test/ijbc/ijbc_lmks_V135PNGAff.idx"],
+        "baseline": ["/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.rec",
+                    "/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx"]}
 
 
 class Eval(object):
 
-    def __init__(self, local_rank, weight_path, fp16=True, emb_size=512, flip=False):
+    def __init__(self, local_rank, weight_path, fp16=True, emb_size=512, flip=False, with_index=False):
         self.backbone = None
         self.local_rank = local_rank
         self.fp16 = fp16
@@ -33,6 +38,7 @@ class Eval(object):
         self.emb_size = emb_size
         self.device = "cuda:{}".format(local_rank)
         self.weight_path = weight_path
+        self.with_index = with_index
         self.prepare()
 
     def network_init(self):
@@ -56,10 +62,18 @@ class Eval(object):
         label_list = []
         index_list = []
         for step, data in enumerate(dataloader):
+            imgs = data[0]
             if self.flip:
-                imgs, flip_img, label, index = data
+                flip_img = data[1]
+                label = data[2]
             else:
-                imgs, label, index = data
+                label = data[1]
+
+            if self.with_index:
+                index = data[-1]
+            else:
+                index = -1
+
             out = self.backbone(imgs)
             if step % 100 == 0:
                 print("process {}".format(step))
@@ -69,7 +83,7 @@ class Eval(object):
         return embeddings_list, label_list, index_list
 
 
-def build_dataset(bin_path, local_rank, batch_size):
+def build_dataset(bin_path, local_rank, batch_size, origin_prepro):
     dataset = MXBinFaceDataset(bin_path, local_rank)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
@@ -77,13 +91,37 @@ def build_dataset(bin_path, local_rank, batch_size):
         sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
     return dataloader
 
-def build_rec_dataset(rec_path, idx_path, local_rank, batch_size):
-    dataset = MXTestFaceDataset(rec_path, idx_path, local_rank)
+def build_rec_dataset(rec_path, idx_path, local_rank, batch_size, origin_prepro):
+    dataset = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank, origin_preprocess=origin_prepro)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
         local_rank=local_rank, dataset=dataset, batch_size=batch_size,
         sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
     return dataloader
+
+def build_baseline_dataset(rec_path, idx_path, local_rank, batch_size, origin_prepro):
+    dataset = MXFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank, origin_preprocess=origin_prepro, training=False)
+
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
+    dataloader = EvalDataLoader(
+        local_rank=local_rank, dataset=dataset, batch_size=batch_size,
+        sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
+    return dataloader
+
+def write_label_index(label_list, local_rank, dst_path):
+    label_dict = defaultdict(list)
+
+    for label_idx, label in enumerate(label_list):
+        label_dict[label].append(label_idx)
+    local_dst_path = "{}_{}".format(dst_path, local_rank)
+
+    with open(local_dst_path, "w") as fw:
+        for k, v in label_dict.items():
+            label_str = "{},".format(k)
+            for idx in v:
+                label_str += " {}".format(idx)
+            fw.writelines(label_str + "\n")
+
 
 def init_process(rank, world_size, args, fn):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -99,15 +137,18 @@ def run(args, rank, world_size):
     test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=True)
     if dataset_name == "ijbc":
         dataloader = build_rec_dataset(dataset_dict[dataset_name][0],
-                dataset_dict[dataset_name][1], rank, batch_size=batch_size)
+                dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
     elif dataset_name == "lfw":
         dataloader = build_dataset(bin_path, rank, batch_size=batch_size)
+    elif dataset_name == "baseline":
+        dataloader = build_baseline_dataset(dataset_dict[dataset_name][0], 
+                dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
     else:
         raise AssertionError("not a good dataset name: {}".format(dataset_name))
 
     embeddings_list, label_list, index_list = test.eval(dataloader)
 
-    output = args.output 
+    output = args.output
     feature_path = "{}.bin".format(rank)
     feature_path = os.path.join(output, feature_path)
     label_path = "{}.txt".format(rank)
@@ -117,6 +158,9 @@ def run(args, rank, world_size):
         for label, index in zip(label_list, index_list):
             fw.writelines("{} {}\n".format(label, index))
 
+    label_index_path = "label_index.txt"
+    label_index_path = os.path.join(output, label_index_path)
+    write_label_index(label_list, rank, label_index_path)
     fw = open(feature_path, "wb")
 
     for embed in embeddings_list:
@@ -149,6 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=512, help="")
     parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
     parser.add_argument("--output", type=str, default="/home/users/han.tang/data/eval/features/", help="")
+    parser.add_argument("--origin_prepro", action="store_true", help="")
     args = parser.parse_args()
     main(args)
 
