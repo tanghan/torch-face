@@ -19,8 +19,8 @@ import struct
 var_target = []
 
 dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint360k/lfw.bin"], 
-        "ijbc": ["/home/users/han.tang/data/test/ijbc_lmks_V135PNGAff.rec",
-                 "/home/users/han.tang/data/test/ijbc_lmks_V135PNGAff.idx"]}
+        "ijbc": ["/home/users/han.tang/data/test/ijbc/ijbc_lmks_V135PNGAff.rec",
+                 "/home/users/han.tang/data/test/ijbc/ijbc_lmks_V135PNGAff.idx"]}
 
 
 class Eval(object):
@@ -29,6 +29,7 @@ class Eval(object):
         self.backbone = None
         self.local_rank = local_rank
         self.fp16 = fp16
+        self.flip = flip
         self.emb_size = emb_size
         self.device = "cuda:{}".format(local_rank)
         self.weight_path = weight_path
@@ -55,7 +56,7 @@ class Eval(object):
         label_list = []
         index_list = []
         for step, data in enumerate(dataloader):
-            if flip:
+            if self.flip:
                 imgs, flip_img, label, index = data
             else:
                 imgs, label, index = data
@@ -93,13 +94,14 @@ def init_process(rank, world_size, args, fn):
 
 def run(args, rank, world_size):
     dataset_name = args.dataset
+    batch_size = args.batch_size
     bin_path = dataset_dict[dataset_name]
     test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=True)
     if dataset_name == "ijbc":
         dataloader = build_rec_dataset(dataset_dict[dataset_name][0],
-                dataset_dict[dataset_name][1], rank, batch_size=64)
+                dataset_dict[dataset_name][1], rank, batch_size=batch_size)
     elif dataset_name == "lfw":
-        dataloader = build_dataset(bin_path, rank, batch_size=64)
+        dataloader = build_dataset(bin_path, rank, batch_size=batch_size)
     else:
         raise AssertionError("not a good dataset name: {}".format(dataset_name))
 
@@ -108,14 +110,14 @@ def run(args, rank, world_size):
     output = args.output 
     feature_path = "{}.bin".format(rank)
     feature_path = os.path.join(output, feature_path)
-    label_path = "{}_label.txt".format(rank)
+    label_path = "{}.txt".format(rank)
     label_path = os.path.join(output, label_path)
 
     with open(label_path, "w") as fw:
         for label, index in zip(label_list, index_list):
             fw.writelines("{} {}\n".format(label, index))
 
-    fw = open(feature_path, "ab")
+    fw = open(feature_path, "wb")
 
     for embed in embeddings_list:
         embed_num = len(embed)
@@ -144,6 +146,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="eval")
     parser.add_argument("--dataset", type=str, default="ijbc", help="")
     parser.add_argument("--gpu_num", type=int, default=2, help="")
+    parser.add_argument("--batch_size", type=int, default=512, help="")
     parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
     parser.add_argument("--output", type=str, default="/home/users/han.tang/data/eval/features/", help="")
     args = parser.parse_args()

@@ -44,6 +44,8 @@ def run(args, rank, world_size):
     dataloader = build_test_dataset(ijbc_rec_path, ijbc_idx_path, rank, batch_size=64)
     for data in dataloader:
         print(data[0].shape)
+        print(data[1])
+        print(data[2])
 
 def main(args):
     gpu_num = args.gpu_num
