@@ -116,17 +116,19 @@ class MXFaceDataset(Dataset):
         
     def __getitem__(self, index):
         idx = self.imgidx[index]
+        sample = 1
         s = self.imgrec.read_idx(idx)
         #header, img = mx.recordio.unpack(s)
         header, img = unpack_fp64(s)
         label = header.label
+
         if not isinstance(label, numbers.Number):
             label = label[0]
         label = torch.tensor(label, dtype=torch.long)
         sample = mx.image.imdecode(img).asnumpy()
         if self.transform is not None:
             sample = self.transform(sample)
-        return sample, label
+        return sample, int(label)
 
     def __len__(self):
         return len(self.imgidx)

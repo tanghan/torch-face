@@ -5,15 +5,16 @@ import argparse
 from collections import defaultdict
 
 import torch.multiprocessing as mp
+import torch.distributed as dist
 import struct
 import numpy as np
 
 def parse_label_index(part_num, data_dir):
     label_dict = defaultdict(list)
     for i in range(part_num):
-        label_path = "label_index.txt_{}".format(part_num)
+        label_path = "label_index.txt_{}".format(i)
         label_path = os.path.join(data_dir, label_path)
-        with open(path, "r") as fr:
+        with open(label_path, "r") as fr:
             while 1:
                 line = fr.readline()
                 if not line:
@@ -37,7 +38,8 @@ def init_process(rank, world_size, args, label_dict, fn):
 
 def run(args, rank, world_size, label_dict):
     total_label_num = len(label_dict)
-    split_num = total_label_num // rank
+    #total_label_num = 1000
+    split_num = total_label_num // world_size
     remainder = total_label_num - world_size * split_num
     if rank == world_size - 1:
         process_num = split_num
@@ -52,10 +54,12 @@ def run(args, rank, world_size, label_dict):
     emb_size = args.emb_size
     for part_idx in range(part_num):
         fea_path = "{}.bin".format(part_idx)
+        fea_path = os.path.join(data_dir, fea_path)
         fr = open(fea_path, "rb")
         fea_file_list.append(fr)
 
     all_fea = []
+    process_id = 0
     for label_id in range(start, start + process_num):
         fea_pos_list = label_dict[label_id]
 
@@ -69,11 +73,14 @@ def run(args, rank, world_size, label_dict):
             feas.append(fea)
         mean_fea = np.mean(np.array(feas).reshape(-1, emb_size), 0)
         all_fea.append(mean_fea)
+        if process_id % 2000 == 0:
+            print("process_id: {}, rank: {}".format(process_id, rank))
+        process_id += 1
     dst_feature_path = "mean_fea_{}_{}.bin".format(start, process_num)
     dst_feature_path = os.path.join(data_dir, dst_feature_path)
     with open(dst_feature_path, "wb") as fw:
-        for temp_fea = all_fea:
-            fea_bytes = struct.pack("f" * emb_size, temp_fea.reshape(-1))
+        for temp_fea in all_fea:
+            fea_bytes = struct.pack("f" * emb_size, *temp_fea.reshape(-1))
             fw.write(fea_bytes)
 
     for part_idx in range(part_num):
@@ -83,6 +90,7 @@ def run(args, rank, world_size, label_dict):
 def main(args):
     part_num = args.part_num
     data_dir = args.data_dir
+    size = args.num_threads
     label_dict = parse_label_index(part_num, data_dir)
     processes = []
     mp.set_start_method("spawn")
@@ -99,7 +107,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--part_num", type=int, default=4, help="")
     parser.add_argument("--data_dir", type=str, default="/home/users/han.tang/workspace/weight_imprint", help="")
-    parser.add_argument("--num_threads", type=int, default=10, help="")
+    parser.add_argument("--num_threads", type=int, default=20, help="")
     parser.add_argument("--emb_size", type=int, default=512, help="")
     args = parser.parse_args()
     main(args)

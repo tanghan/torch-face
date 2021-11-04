@@ -29,14 +29,14 @@ def run_train(args, rank, world_size):
     torch.cuda.set_device(rank)
     batch_size = args.batch_size
     sample_rate = args.sample_rate
-    train_loader, train_sampler = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size)
+    train_loader, train_sampler = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
     output_dir = args.output_dir
 
     init_logging(rank, output_dir)
 
     num_image = 4800000
     num_epoch = 20
-    trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate)
+    trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_prefix=args.weights_prefix)
     total_step = num_image // (batch_size * num_epoch * world_size)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
@@ -51,8 +51,8 @@ def run_train(args, rank, world_size):
         total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
         global_step = total_step
 
-def get_dataloader(rec_path, idx_path, local_rank, batch_size=128):
-    train_set = MXFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank)
+def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro=False):
+    train_set = MXFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank, origin_preprocess=origin_prepro)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True)
     train_loader = DataLoaderX(
@@ -63,7 +63,7 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128):
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=20, sample_rate=0.1):
+    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=20, sample_rate=0.1, weights_prefix=None):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
@@ -84,15 +84,21 @@ class Trainer():
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
         self.decay_epoch = [8, 12, 15, 18]
         self.sample_rate = sample_rate
+        self.weights_prefix = weights_prefix
 
         self.prepare()
 
     def network_init(self):
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
-        self.backbone.train()
+
+        if self.weights_prefix is not None:
+            backbone_pth = os.path.join(self.weights_prefix, "backbone.pth")
+            self.backbone.load_state_dict(torch.load(backbone_pth, map_location=torch.device(self.local_rank)))
+
         self.backbone.to(self.device)
         self.backbone = torch.nn.parallel.DistributedDataParallel(
             module=self.backbone, broadcast_buffers=False, device_ids=[self.local_rank])
+        self.backbone.train()
         logging.info("init network at {} finished".format(self.local_rank))
 
 
@@ -102,9 +108,9 @@ class Trainer():
     def set_tail(self, loss_fn):
 
         self.module_partial_fc = PartialFC(
-            rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=False,
+            rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=True,
             batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes,
-            sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix="./")
+            sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix=self.weights_prefix)
 
     def set_optimizer(self, lr):
         def lr_step_func(current_step):
@@ -184,8 +190,11 @@ if __name__ == "__main__":
     parser.add_argument("--gpu_num", type=int, default=8, help="")
     parser.add_argument("--rec_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.rec", help="")
     parser.add_argument("--idx_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx", help="")
-    parser.add_argument("--batch_size", type=int, default=128, help="")
+    parser.add_argument("--batch_size", type=int, default=32, help="")
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
     parser.add_argument("--sample_rate", type=float, default=0.1, help="")
+    parser.add_argument("--resume", action="store_true", help="")
+    parser.add_argument("--weights_prefix", type=str, default="/home/users/han.tang/workspace/weight_imprint/imprint_weights", help="")
+    parser.add_argument("--origin_prepro", action="store_true", help="")
     args = parser.parse_args()
     main(args)

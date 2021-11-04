@@ -25,7 +25,10 @@ dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint3
         "ijbc": ["/home/users/han.tang/data/test/ijbc/ijbc_lmks_V135PNGAff.rec",
                  "/home/users/han.tang/data/test/ijbc/ijbc_lmks_V135PNGAff.idx"],
         "baseline": ["/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.rec",
-                    "/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx"]}
+                    "/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx"],
+        "cluster-baseline": ["/running_package/torch-face/baseline_2030_V0.2/baseline_2030_V0.2.rec",
+                    "/running_package/torch-face/baseline_2030_V0.2/baseline_2030_V0.2.idx"]
+        }
 
 
 class Eval(object):
@@ -105,12 +108,13 @@ def build_baseline_dataset(rec_path, idx_path, local_rank, batch_size, origin_pr
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
         local_rank=local_rank, dataset=dataset, batch_size=batch_size,
-        sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
+        sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
     return dataloader
 
 def write_label_index(label_list, local_rank, dst_path):
     label_dict = defaultdict(list)
 
+    label_list = label_list.cpu().numpy()
     for label_idx, label in enumerate(label_list):
         label_dict[label].append(label_idx)
     local_dst_path = "{}_{}".format(dst_path, local_rank)
@@ -132,21 +136,32 @@ def init_process(rank, world_size, args, fn):
 
 def run(args, rank, world_size):
     dataset_name = args.dataset
+    dataset_type = args.dataset_type
     batch_size = args.batch_size
-    bin_path = dataset_dict[dataset_name]
     test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=True)
-    if dataset_name == "ijbc":
+    if dataset_type == "rec":
         dataloader = build_rec_dataset(dataset_dict[dataset_name][0],
                 dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
-    elif dataset_name == "lfw":
-        dataloader = build_dataset(bin_path, rank, batch_size=batch_size)
-    elif dataset_name == "baseline":
-        dataloader = build_baseline_dataset(dataset_dict[dataset_name][0], 
+    elif dataset_type == "baseline":
+        dataloader = build_baseline_dataset(dataset_dict[dataset_name][0],
                 dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
+    elif dataset_type == "lfw":
+        dataloader = build_dataset(dataset_dict[dataset_name][0], rank, batch_size=batch_size)
     else:
         raise AssertionError("not a good dataset name: {}".format(dataset_name))
 
+
+    total_num = 4799734
+    remainder_num = total_num % world_size
+    remainder_list = np.arange(remainder_num)
+    save_num = total_num // world_size
+    if rank in remainder_list:
+        save_num += 1
     embeddings_list, label_list, index_list = test.eval(dataloader)
+    label_list = torch.cat(label_list)
+    label_list = label_list[:save_num]
+    embeddings_list = torch.cat(embeddings_list)
+    embeddings_list = embeddings_list[:save_num]
 
     output = args.output
     feature_path = "{}.bin".format(rank)
@@ -154,9 +169,11 @@ def run(args, rank, world_size):
     label_path = "{}.txt".format(rank)
     label_path = os.path.join(output, label_path)
 
+    '''
     with open(label_path, "w") as fw:
         for label, index in zip(label_list, index_list):
             fw.writelines("{} {}\n".format(label, index))
+    '''
 
     label_index_path = "label_index.txt"
     label_index_path = os.path.join(output, label_index_path)
@@ -168,7 +185,7 @@ def run(args, rank, world_size):
         #print(embed_num, embed.shape)
         embed = embed.cpu().numpy().astype(np.float32)
         embed = embed.reshape(-1)
-        raw_data = struct.pack("f" * 512 * embed_num, *embed)
+        raw_data = struct.pack("f" * 512, *embed)
         fw.write(raw_data)
     fw.close()
 
@@ -189,6 +206,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="eval")
     parser.add_argument("--dataset", type=str, default="ijbc", help="")
+    parser.add_argument("--dataset_type", type=str, default="rec", help="")
     parser.add_argument("--gpu_num", type=int, default=2, help="")
     parser.add_argument("--batch_size", type=int, default=512, help="")
     parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
