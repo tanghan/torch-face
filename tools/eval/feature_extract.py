@@ -27,7 +27,15 @@ dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint3
         "baseline": ["/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.rec",
                     "/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx"],
         "cluster-baseline": ["/running_package/torch-face/baseline_2030_V0.2/baseline_2030_V0.2.rec",
-                    "/running_package/torch-face/baseline_2030_V0.2/baseline_2030_V0.2.idx"]
+                    "/running_package/torch-face/baseline_2030_V0.2/baseline_2030_V0.2.idx"],
+        "ValLife": ["/home/users/han.tang/data/test/val/ValLife/valLife_V0.2_indexed.rec",
+                    "/home/users/han.tang/data/test/val/ValLife/valLife_V0.2_indexed.idx"],
+        "ValID": ["/home/users/han.tang/data/test/val/ValID/wanren_V0.2_indexed.rec",
+                    "/home/users/han.tang/data/test/val/ValID/wanren_V0.2_indexed.idx"],
+        "Val30W_query": ["/home/users/han.tang/data/test/val/Val30W/qry30w_V1.0_lmks_V0.2_clean0916_indexed.rec",
+                    "/home/users/han.tang/data/test/val/Val30W/qry30w_V1.0_lmks_V0.2_clean0916_indexed.idx"],
+        "Val30W_gallery": ["/home/users/han.tang/data/test/val/Val30W/gly30w_V1.0_lmks_V0.2_indexed.rec",
+                    "/home/users/han.tang/data/test/val/Val30W/gly30w_V1.0_lmks_V0.2_indexed.idx"],
         }
 
 
@@ -95,7 +103,7 @@ def build_dataset(bin_path, local_rank, batch_size, origin_prepro):
     return dataloader
 
 def build_rec_dataset(rec_path, idx_path, local_rank, batch_size, origin_prepro):
-    dataset = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank, origin_preprocess=origin_prepro)
+    dataset = MXTestFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank, origin_preprocess=origin_prepro)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
         local_rank=local_rank, dataset=dataset, batch_size=batch_size,
@@ -114,7 +122,6 @@ def build_baseline_dataset(rec_path, idx_path, local_rank, batch_size, origin_pr
 def write_label_index(label_list, local_rank, dst_path):
     label_dict = defaultdict(list)
 
-    label_list = label_list.cpu().numpy()
     for label_idx, label in enumerate(label_list):
         label_dict[label].append(label_idx)
     local_dst_path = "{}_{}".format(dst_path, local_rank)
@@ -162,6 +169,7 @@ def run(args, rank, world_size):
     label_list = label_list[:save_num]
     embeddings_list = torch.cat(embeddings_list)
     embeddings_list = embeddings_list[:save_num]
+    label_list = label_list.cpu().numpy()
 
     output = args.output
     feature_path = "{}.bin".format(rank)
@@ -169,11 +177,11 @@ def run(args, rank, world_size):
     label_path = "{}.txt".format(rank)
     label_path = os.path.join(output, label_path)
 
-    '''
     with open(label_path, "w") as fw:
-        for label, index in zip(label_list, index_list):
-            fw.writelines("{} {}\n".format(label, index))
-    '''
+        #for label, index in zip(label_list, index_list):
+        #    fw.writelines("{} {}\n".format(label, index))
+        for label in label_list:
+            fw.writelines("{}\n".format(label))
 
     label_index_path = "label_index.txt"
     label_index_path = os.path.join(output, label_index_path)
