@@ -122,7 +122,7 @@ class Trainer():
 
         self.opt_backbone = torch.optim.SGD(
             params=[{'params': self.backbone.parameters()}],
-            lr=lr / 512 * self.batch_size * self.world_size,
+            lr=lr / 512 * self.batch_size * self.world_size * 0.1,
             momentum=0.9, weight_decay=5e-4)
 
         self.scheduler_backbone = torch.optim.lr_scheduler.LambdaLR(

@@ -4,7 +4,8 @@ import numpy as np
 import torch
 from torch.nn.parameter import Parameter
 
-weights_path = "/home/users/han.tang/workspace/weight_imprint"
+import argparse
+
 def parse_mean_fea_path(weights_path, fea_prefix="mean_fea_"):
     temp_list = os.listdir(weights_path)
     imprint_list = []
@@ -50,13 +51,22 @@ def save_rank_weights(feas, out_dir="", num_classes=500000, world_size=8, prefix
         torch.save(weight.data, weight_name)
         torch.save(weight_mom, weight_mom_name)
 
-def main():
-    imprint_list = parse_mean_fea_path(weights_path)
+def main(args):
+    output_dir = args.output_dir
+    weights_dir = args.weights_dir
+    assert os.path.isdir(output_dir)
+    assert os.path.isdir(weights_dir)
+
+    imprint_list = parse_mean_fea_path(weights_dir)
     feas = combine_imprint_list(imprint_list)
-    save_rank_weights(feas, prefix="/home/users/han.tang/workspace/weight_imprint/imprint_weights")
+    save_rank_weights(feas, prefix=output_dir)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("--weights_dir", type=str, default=None, help="")
+    parser.add_argument("--output_dir", type=str, default=None, help="")
+    args = parser.parse_args()
+    main(args)
 
 
