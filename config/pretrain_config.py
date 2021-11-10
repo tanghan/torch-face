@@ -9,7 +9,7 @@ opt.network.input_shape = (3, 112, 112)
 opt.utils = edict()
 opt.utils.checkpoint = ""
 opt.utils.seed = 1234
-opt.utils.num_gpu = 8
+opt.utils.num_gpu = 4
 opt.utils.num_epoch = 20
 opt.utils.fp16 = True
 
@@ -34,12 +34,12 @@ def uniform_dataset(name, rec_path, idx_path, batch_size, num_samples, num_class
 uniform_dataset('glint360k', 
         '/home/users/han.tang/data/public_face_data/glint/glint360k/train.rec', 
         '/home/users/han.tang/data/public_face_data/glint/glint360k/train.idx', 
-        batch_size=112,
+        batch_size=8,
         num_samples=17091657,
         num_classes=360232)
 uniform_dataset('megaface', 
         '/home/users/han.tang/data/public_face_data/faces_megafacetrain_112x112/train.rec', 
         '/home/users/han.tang/data/public_face_data/faces_megafacetrain_112x112/train.idx', 
-        batch_size=56,
+        batch_size=4,
         num_samples=4574213,
         num_classes=657078)

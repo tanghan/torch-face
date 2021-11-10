@@ -34,8 +34,6 @@ def run_train(opt, rank, world_size):
     torch.cuda.set_device(rank)
     seed = opt.utils.seed
 
-    batch_size = opt.batch_size
-
     trainset = opt.dataset.trainset
 
     num_samples_list = []
@@ -136,6 +134,12 @@ class Trainer():
         self.scheduler_pfc_list = []
 
         self.prepare()
+        self.batch_size_offset = [0]
+
+        batch_offset = 0
+        for batch_size in self.batch_size_list:
+            batch_offset += batch_size
+            self.batch_size_offset.append(batch_offset)
 
     def network_init(self):
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
@@ -195,29 +199,49 @@ class Trainer():
     def train(self, epoch, global_step, train_loader, grad_amp, loss,
             callback_logging, callback_checkpoint):
         for step, (img, label) in enumerate(train_loader):
+            
             features = F.normalize(self.backbone(img))
-            x_grad, loss_v = self.module_partial_fc.forward_backward(label, features, self.opt_pfc)
+            x_grad_list = []
+            loss_v_list = []
+            dataset_features = []
+            loss_v = 0
+            for dataset_idx in len(self.dataset_name_list):
+                s = self.batch_size_offset[dataset_idx]
+                e = self.batch_size_offset[dataset_idx + 1]
+                feature_ = features[s:e, ]
+                dataset_features.append(feature_)
+                label_ = label[s:e, ]
+                x_grad, loss_v_ = self.module_partial_fc.forward_backward(label_, feature_, self.opt_pfc_list[dataset_idx])
+                loss_v += loss_v_
+
+                if self.fp16:
+                    feature_.backward(grad_amp.scale(x_grad))
+                else:
+                    feature_.backward(x_grad)
+
             if self.fp16:
-                features.backward(grad_amp.scale(x_grad))
                 grad_amp.unscale_(self.opt_backbone)
                 clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
                 grad_amp.step(self.opt_backbone)
                 grad_amp.update()
             else:
-                features.backward(x_grad)
                 clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
                 opt_backbone.step()
 
-            self.opt_pfc.step()
-            self.module_partial_fc.update()
+            for dataset_idx in len(self.dataset_name_list):
+                self.opt_pfc_list[dataset_idx].step()
+                self.module_partial_fc_list[dataset_idx].update()
+                self.opt_pfc_list[dataset_idx].zero_grad()
+
             self.opt_backbone.zero_grad()
-            self.opt_pfc.zero_grad()
             loss.update(loss_v, 1)
             callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
             self.scheduler_backbone.step()
-            self.scheduler_pfc.step()
+
+            for dataset_idx in len(self.dataset_name_list):
+                self.scheduler_pfc_list[dataset_idx].step()
         total_step = global_step + step
-        callback_checkpoint(total_step, self.backbone, self.module_partial_fc)
+        callback_checkpoint(total_step, self.backbone, None)
 
         return total_step        
 
@@ -240,8 +264,6 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train")
-    parser.add_argument("--data_prefix", type=str, default="/home/users/han.tang/data/public_face_data/glint/glint360k/train", help="")
-    parser.add_argument("--batch_size", type=int, default=128, help="")
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
     parser.add_argument("--config", type=str, default="./config/pretrain_config.py", help="")
     args = parser.parse_args()
