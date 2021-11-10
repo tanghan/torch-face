@@ -1,0 +1,21 @@
+dataset:
+    train:
+        rec_path: './baseline_2030_V0.2/baseline_2030_V0.2.rec'
+        # rec_path: '/cluster_home/HobotDataset/112x112/insight_face/baseline_2030_V0.2/baseline_2030_V0.2.rec'
+        num_classes: 500000
+        unpack64: True
+        sample_type: 'balance'
+        sample_bounds: [8, 10, 8]
+        replace: False
+        shuffle: True
+data_loader:
+    num_workers: 4
+    input_shape: [3, 112, 112]
+    input_format: 'rgb'
+    input_mean: 128.0
+    input_scale: 0.0078125
+    shuffle: true
+    train: 'gluon_face.single_task.recognition2.loader.get_train_loader'
+    val: 'gluon_face.single_task.recognition2.loader.get_val_loader'
+    val_bin: 'gluon_face.single_task.recognition2.loader.get_bin_loader'
+

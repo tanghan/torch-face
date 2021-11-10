@@ -12,7 +12,7 @@ from core.models.resnet import iresnet
 from core.modules.loss.losses import get_loss
 from utils.callback_utils.utils_callbacks import CallBackVerification, CallBackLogging, CallBackModelCheckpoint
 from core.dataset.dataset import MXFaceDataset, DataLoaderX
-from core.dataset.dataset import MXMultiFaceDataset
+from core.dataset.sampler.multi_sampler import DistributedMultiBatchSampler
 
 from core.modules.tail.partial_fc import PartialFC
 from torch.nn.utils import clip_grad_norm_
@@ -30,11 +30,12 @@ def run_train(opt, rank, world_size):
     torch.cuda.set_device(rank)
     trainset = opt.dataset.trainset
     pivot_dataset = trainset[0]
+    seed = int(opt.utils.seed)
 
     print("train dataset: {}".format(trainset))
 
     batch_size = opt.batch_size
-    train_loader, train_sampler = get_dataloader(rank, opt)
+    train_loader, train_sampler = get_dataloader(rank, opt, seed)
     output_dir = args.output_dir
 
     init_logging(rank, output_dir)
@@ -56,16 +57,33 @@ def run_train(opt, rank, world_size):
         total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
         global_step = total_step
 
-def get_dataloader(local_rank, opt):
+def get_dataloader(local_rank, opt, seed):
     trainset = opt.dataset.trainset
-    for dataname in trainset:
-        train_set = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank, origin_preprocess=False)
 
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True)
-        train_loader = DataLoaderX(
-            local_rank=local_rank, dataset=train_set, batch_size=batch_size,
-            sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
-    return train_loader, train_sampler
+    total_samples_list = []
+    batch_size_list = []
+    num_classes_list = []
+    sampler_list = []
+
+    for dataname in trainset:
+        rec_path = opt.dataset[dataname].rec_path
+        idx_path = opt.dataset[dataname].idx_path
+        num_samples = opt.dataset[dataname].num_samples
+        num_classes = opt.dataset[dataname].num_classes
+        batch_size = opt.dataset[dataname].batch_size
+        train_set = MXFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank, origin_preprocess=False)
+
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True, seed=seed)
+        sampler_list.append(train_sampler)
+        total_samples_list.append(num_samples)
+        batch_size_list.append(batch_size)
+        num_classes_list.append(num_classes)
+
+    batch_sampler = DistributedMultiBatchSampler(samplers=sampler_list, batch_size_list=batch_size_list, total_sample_num_list=total_samples_list)
+    train_loader = DataLoaderX(
+        local_rank=local_rank, dataset=train_set, batch_size=batch_size,
+        sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
+    return train_loader
 
 
 class Trainer():

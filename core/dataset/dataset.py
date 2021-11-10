@@ -70,7 +70,7 @@ class DataLoaderX(DataLoader):
 
 
 class MXFaceDataset(Dataset):
-    def __init__(self, data_prefix, local_rank, origin_preprocess=False):
+    def __init__(self, rec_path, idx_path, local_rank, origin_preprocess=False):
         super(MXFaceDataset, self).__init__()
         if origin_preprocess:
             self.transform = transforms.Compose(
@@ -86,8 +86,8 @@ class MXFaceDataset(Dataset):
                  ToTensor(),
                 ])
         self.local_rank = local_rank
-        path_imgrec = "{}.rec".format(data_prefix)
-        path_imgidx = "{}.idx".format(data_prefix)
+        path_imgrec = rec_path
+        path_imgidx = idx_path
         print("path imgrec: {}, path_imgidx: {}".format(path_imgrec, path_imgidx))
         self.imgrec = mx.recordio.MXIndexedRecordIO(path_imgidx, path_imgrec, 'r')
         s = self.imgrec.read_idx(0)
