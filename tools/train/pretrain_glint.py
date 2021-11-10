@@ -12,6 +12,7 @@ from core.models.resnet import iresnet
 from core.modules.loss.losses import get_loss
 from utils.callback_utils.utils_callbacks import CallBackVerification, CallBackLogging, CallBackModelCheckpoint
 from core.dataset.dataset import MXFaceDataset, DataLoaderX
+from core.dataset.dataset import MXMultiFaceDataset
 
 from core.modules.tail.partial_fc import PartialFC
 from torch.nn.utils import clip_grad_norm_
@@ -25,10 +26,15 @@ def init_process(rank, world_size, args, fn):
 		rank=rank, world_size=world_size)
     fn(args, rank, world_size)
 
-def run_train(args, rank, world_size):
+def run_train(opt, rank, world_size):
     torch.cuda.set_device(rank)
-    batch_size = args.batch_size
-    train_loader, train_sampler = get_dataloader(args.data_prefix, rank, batch_size=batch_size)
+    trainset = opt.dataset.trainset
+    pivot_dataset = trainset[0]
+
+    print("train dataset: {}".format(trainset))
+
+    batch_size = opt.batch_size
+    train_loader, train_sampler = get_dataloader(rank, opt)
     output_dir = args.output_dir
 
     init_logging(rank, output_dir)
@@ -50,13 +56,15 @@ def run_train(args, rank, world_size):
         total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
         global_step = total_step
 
-def get_dataloader(data_prefix, local_rank, batch_size=128):
-    train_set = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank, origin_preprocess=False)
+def get_dataloader(local_rank, opt):
+    trainset = opt.dataset.trainset
+    for dataname in trainset:
+        train_set = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank, origin_preprocess=False)
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True)
-    train_loader = DataLoaderX(
-        local_rank=local_rank, dataset=train_set, batch_size=batch_size,
-        sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True)
+        train_loader = DataLoaderX(
+            local_rank=local_rank, dataset=train_set, batch_size=batch_size,
+            sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
     return train_loader, train_sampler
 
 
@@ -164,11 +172,15 @@ class Trainer():
 
 
 def main(args):
-    size = args.gpu_num
+    config = args.config
+    assert os.path.exists(config)
+    opt = SourceFileLoader('module.name', './config/pretrain_config.py').load_module().opt
+    size = opt.utils.num_gpu
     processes = []
+
     mp.set_start_method("spawn")
     for rank in range(size):
-        p = mp.Process(target=init_process, args=(rank, size, args, run_train))
+        p = mp.Process(target=init_process, args=(rank, size, opt, run_train))
         p.start()
         processes.append(p)
 
@@ -177,9 +189,9 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train")
-    parser.add_argument("--gpu_num", type=int, default=8, help="")
     parser.add_argument("--data_prefix", type=str, default="/home/users/han.tang/data/public_face_data/glint/glint360k/train", help="")
     parser.add_argument("--batch_size", type=int, default=128, help="")
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
+    parser.add_argument("--config", type=str, default="./config/pretrain_config.py", help="")
     args = parser.parse_args()
     main(args)

@@ -12,7 +12,7 @@ from torchvision import transforms
 from core.dataset.transforms.base_transform import NormalizeTransformer, ToTensor, MirrorTransformer
 
 class MXMultiFaceDataset(Dataset):
-    def __init__(self, data_prefix, local_rank, origin_preprocess=False):
+    def __init__(self, indexed_rec_list, local_rank, origin_preprocess=False, seed=1234):
         super(MXFaceDataset, self).__init__()
         if origin_preprocess:
             self.transform = transforms.Compose(
@@ -28,17 +28,24 @@ class MXMultiFaceDataset(Dataset):
                  ToTensor(),
                 ])
         self.local_rank = local_rank
-        path_imgrec = "{}.rec".format(data_prefix)
-        path_imgidx = "{}.idx".format(data_prefix)
-        print("path imgrec: {}, path_imgidx: {}".format(path_imgrec, path_imgidx))
-        self.imgrec = mx.recordio.MXIndexedRecordIO(path_imgidx, path_imgrec, 'r')
-        s = self.imgrec.read_idx(0)
-        header, _ = mx.recordio.unpack(s)
-        if header.flag > 0:
-            self.header0 = (int(header.label[0]), int(header.label[1]))
-            self.imgidx = np.array(range(1, int(header.label[0])))
-        else:
-            self.imgidx = np.array(list(self.imgrec.keys))
+        self.imgrec_list = []
+        self.imgidx_list = []
+        self.rng = np.random.RandomState(seed)
+
+        for index_idx, index_rec in enumerate(indexed_rec_list):
+            path_imgrec = index_rec[0]
+            path_imgidx = index_rec[1]
+            print("path imgrec: {}, path_imgidx: {}".format(path_imgrec, path_imgidx))
+            imgrec = mx.recordio.MXIndexedRecordIO(path_imgidx, path_imgrec, 'r')
+            self.imgrec_list.append(imgrec)
+            s = imgrec.read_idx(0)
+            header, _ = mx.recordio.unpack(s)
+            if header.flag > 0:
+                self.header0 = (int(header.label[0]), int(header.label[1]))
+                imgidx = np.array(range(1, int(header.label[0])))
+            else:
+                imgidx = np.array(list(self.imgrec.keys))
+            self.imgidx_list.append(imgidx)
 
     def __getitem__(self, index):
         idx = self.imgidx[index]
@@ -54,5 +61,7 @@ class MXMultiFaceDataset(Dataset):
         return sample, label
 
     def __len__(self):
-        return len(self.imgidx)
+        return len(self.imgidx_list[0])
+
+    def shuffle_
 
