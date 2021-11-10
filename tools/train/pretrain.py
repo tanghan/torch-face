@@ -19,6 +19,10 @@ from torch.nn.utils import clip_grad_norm_
 from utils.utils_amp import MaxClipGradScaler
 from utils.logging_utils.utils_logging import AverageMeter, init_logging
 
+from easydict import EasyDict as edict 
+from importlib.machinery import SourceFileLoader
+
+
 def init_process(rank, world_size, args, fn):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12345"
@@ -28,32 +32,43 @@ def init_process(rank, world_size, args, fn):
 
 def run_train(opt, rank, world_size):
     torch.cuda.set_device(rank)
-    trainset = opt.dataset.trainset
-    pivot_dataset = trainset[0]
-    seed = int(opt.utils.seed)
-
-    print("train dataset: {}".format(trainset))
+    seed = opt.utils.seed
 
     batch_size = opt.batch_size
+
+    trainset = opt.dataset.trainset
+
+    num_samples_list = []
+    batch_size_list = []
+    num_classes_list = []
+
+    for dataname in trainset:
+        num_samples = opt.dataset[dataname].num_samples
+        num_classes = opt.dataset[dataname].num_classes
+        batch_size = opt.dataset[dataname].batch_size
+
+        num_samples_list.append(num_samples)
+        batch_size_list.append(batch_size)
+        num_classes_list.append(num_classes)
+
     train_loader, train_sampler = get_dataloader(rank, opt, seed)
     output_dir = args.output_dir
 
     init_logging(rank, output_dir)
 
     num_image = 17091657
-    num_epoch = 20
-    trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch)
+    num_epoch = opt.utils.num_epoch
+    trainer = Trainer(rank, world_size, num_classes_list, num_samples_list)
     total_step = num_image // (batch_size * num_epoch * world_size)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
     global_step = 0 
-    fp16=True
+    fp16 = opt.utils.fp16
 
     grad_amp = MaxClipGradScaler(batch_size, 128 * batch_size, growth_interval=100) if fp16 else None
     loss = AverageMeter()
     for epoch in range(0, num_epoch):
-        train_sampler.set_epoch(epoch)
         total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
         global_step = total_step
 
@@ -64,6 +79,7 @@ def get_dataloader(local_rank, opt, seed):
     batch_size_list = []
     num_classes_list = []
     sampler_list = []
+    dataset_list = []
 
     for dataname in trainset:
         rec_path = opt.dataset[dataname].rec_path
@@ -78,29 +94,37 @@ def get_dataloader(local_rank, opt, seed):
         total_samples_list.append(num_samples)
         batch_size_list.append(batch_size)
         num_classes_list.append(num_classes)
+        dataset_list.append(train_set)
 
-    batch_sampler = DistributedMultiBatchSampler(samplers=sampler_list, batch_size_list=batch_size_list, total_sample_num_list=total_samples_list)
+    dataset=ConcatDataset(dataset_list)
+    batch_sampler = DistributedMultiBatchSampler(samplers=sampler_list, 
+            batch_size_list=batch_size_list, total_sample_num_list=total_samples_list)
     train_loader = DataLoaderX(
-        local_rank=local_rank, dataset=train_set, batch_size=batch_size,
-        sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
+        local_rank=local_rank, dataset=dataset,
+        batch_sampler=batch_sampler, num_workers=opt.dataset.num_workers, pin_memory=True)
     return train_loader
-
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=20, sample_rate=0.1):
+    def __init__(self, local_rank, world_size, num_classes_list, num_samples_list, 
+            batch_size_list, dataset_name_list, num_epoch, emb_size=512, sample_rate=0.1):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
-        self.total_batch_size = self.batch_size * self.world_size
-        self.num_classes = 360232
+        self.batch_size_list = batch_size_list
+
+        self.total_batch_size = self.batch_size_list[0] * self.world_size
+        self.num_classes_list = num_classes_list
+        self.dataset_name_list = dataset_name_list
         self.emb_size = emb_size
 
         self.device = "cuda:{}".format(local_rank)
         self.backbone = None
         self.module_partial_fc = None
+        self.module_partial_fc_list = []
+
         self.loss_fn = None
-        self.num_image = 17091657
+        self.num_image = num_samples_list[0]
         warmup_epoch = -1
         self.num_epoch = num_epoch
         self.fp16 = True
@@ -108,6 +132,8 @@ class Trainer():
         self.total_step = self.num_image // self.total_batch_size * self.num_epoch
         self.decay_epoch = [8, 12, 15, 18]
         self.sample_rate = sample_rate
+        self.opt_pfc_list = []
+        self.scheduler_pfc_list = []
 
         self.prepare()
 
@@ -125,10 +151,14 @@ class Trainer():
 
     def set_tail(self, loss_fn):
 
-        self.module_partial_fc = PartialFC(
-            rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=False,
-            batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes,
-            sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix="./")
+        for dataname, num_classes, batch_size in zip(self.dataset_name_list, self.num_classes_list, 
+                self.batch_size_list):
+            prefix = "./{}".format(dataname)
+            module_partial_fc = PartialFC(
+                rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=False,
+                batch_size=batch_size, margin_softmax=loss_fn, num_classes=num_classes,
+                sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix=prefix)
+            self.module_partial_fc_list.append(module_partial_fc)
 
     def set_optimizer(self, lr):
         def lr_step_func(current_step):
@@ -146,12 +176,15 @@ class Trainer():
         self.scheduler_backbone = torch.optim.lr_scheduler.LambdaLR(
             optimizer=self.opt_backbone, lr_lambda=lr_step_func)
 
-        self.opt_pfc = torch.optim.SGD(
-            params=[{'params': self.module_partial_fc.parameters()}],
-            lr=lr / 512 * self.batch_size * self.world_size,
-            momentum=0.9, weight_decay=5e-4)
-        self.scheduler_pfc = torch.optim.lr_scheduler.LambdaLR(
-            optimizer=self.opt_pfc, lr_lambda=lr_step_func)
+        for i in range(len(self.dataset_name_list)):
+            opt_pfc = torch.optim.SGD(
+                params=[{'params': self.module_partial_fc_list[i].parameters()}],
+                lr=lr / 512 * self.batch_size_list[i] * self.world_size,
+                momentum=0.9, weight_decay=5e-4)
+            scheduler_pfc = torch.optim.lr_scheduler.LambdaLR(
+                optimizer=opt_pfc, lr_lambda=lr_step_func)
+            self.opt_pfc_list.append(opt_pfc)
+            self.scheduler_pfc_list.append(scheduler_pfc)
 
     def prepare(self):
         self.network_init()

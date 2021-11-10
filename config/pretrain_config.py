@@ -11,6 +11,7 @@ opt.utils.checkpoint = ""
 opt.utils.seed = 1234
 opt.utils.num_gpu = 8
 opt.utils.num_epoch = 20
+opt.utils.fp16 = True
 
 
 opt.dataset = edict()
