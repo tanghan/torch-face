@@ -29,15 +29,18 @@ def run_train(args, rank, world_size):
     torch.cuda.set_device(rank)
     batch_size = args.batch_size
     sample_rate = args.sample_rate
-    train_loader, train_sampler = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
+    train_loader, train_sampler, num_samples, num_classes = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
     output_dir = args.output_dir
 
     init_logging(rank, output_dir)
 
-    num_image = 4800000
-    num_epoch = 20
-    trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_prefix=args.weights_prefix)
+    num_image = num_samples
+    num_epoch = 12
+
     total_step = num_image // (batch_size * num_epoch * world_size)
+    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}".format(num_samples, num_classes, total_step, num_epoch))
+
+    trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, num_classes=num_classes, weights_prefix=args.weights_prefix)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
@@ -53,29 +56,31 @@ def run_train(args, rank, world_size):
 
 def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro=False):
     train_set = MXFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank, origin_preprocess=origin_prepro)
+    num_samples = len(train_set)
+    num_classes = len(train_set.id_seq)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True)
     train_loader = DataLoaderX(
         local_rank=local_rank, dataset=train_set, batch_size=batch_size,
         sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
-    return train_loader, train_sampler
+    return train_loader, train_sampler, num_samples, num_classes
 
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=12, sample_rate=0.1, weights_prefix=None):
+    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=12, sample_rate=0.1, num_classes=100000, num_image=1000000, weights_prefix=None):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
         self.total_batch_size = self.batch_size * self.world_size
-        self.num_classes = 6024296
+        self.num_classes = num_classes
         self.emb_size = emb_size
 
         self.device = "cuda:{}".format(local_rank)
         self.backbone = None
         self.module_partial_fc = None
         self.loss_fn = None
-        self.num_image = 13583364
+        self.num_image = num_image
         warmup_epoch = -1
         self.num_epoch = num_epoch
         self.fp16 = True
@@ -94,6 +99,8 @@ class Trainer():
         if self.weights_prefix is not None:
             backbone_pth = os.path.join(self.weights_prefix, "backbone.pth")
             self.backbone.load_state_dict(torch.load(backbone_pth, map_location=torch.device(self.local_rank)))
+
+            logging.info("resume network from {}".format(backbone_pth))
 
         self.backbone.to(self.device)
         self.backbone = torch.nn.parallel.DistributedDataParallel(

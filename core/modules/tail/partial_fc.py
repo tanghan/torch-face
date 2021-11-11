@@ -66,7 +66,10 @@ class PartialFC(Module):
             try:
                 self.weight: torch.Tensor = torch.load(self.weight_name).cuda(local_rank)
                 self.weight_mom: torch.Tensor = torch.load(self.weight_mom_name).cuda(local_rank)
+
+                logging.info("softmax weight resume from {}".format(self.weight_name))
                 if self.weight.shape[0] != self.num_local or self.weight_mom.shape[0] != self.num_local:
+                    logging.info("shape not equal, {} != {} or {} != {}".format(self.weight.shape[0], self.num_local, self.weight_mom.shape[0], self.num_local))
                     raise IndexError
                 logging.info("softmax weight resume successfully!")
                 logging.info("softmax weight mom resume successfully!")
