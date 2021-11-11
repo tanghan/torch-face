@@ -18,6 +18,9 @@ j2 = ["/home/users/han.tang/data/test/val/Val_J2_RealCar/Val_J2_RealCar.rec",
 ValID = ["/home/users/han.tang/data/test/val/ValID/wanren_V0.2_indexed.rec",
             "/home/users/han.tang/data/test/val/ValID/wanren_V0.2_indexed.idx"]
 
+abtdge_id1w = ["/home/users/han.tang/data/abtdge_id1w_Above9_miabove10_20200212/abtdge_id1w_Above9_miabove10_20200212.rec",
+        "/home/users/han.tang/data/abtdge_id1w_Above9_miabove10_20200212/abtdge_id1w_Above9_miabove10_20200212.idx"]
+
 import mxnet as mx
 from utils.mx_rec_utils.parse_rec_utils import unpack_fp64
 
@@ -36,10 +39,11 @@ def static_pulic_dataset(rec_path, idx_path):
     print(len(imgidx))
     print(imgidx[:5])
     print(header)
-    for i in imgidx:
-        s = imgrec.read_idx(i)
-        header, raw_data = mx.recordio.unpack(s)
-        im = mx.image.imdecode(raw_data)
+    last_idx = imgidx[-1]
+    
+    s = imgrec.read_idx(last_idx)
+    header, _ = mx.recordio.unpack(s)
+    print(header.label)
         #print(im.shape)
         #print(im.shape)
 
@@ -54,6 +58,7 @@ def static_baseline_dataset(rec_path, idx_path):
     id2range = {}
     id_num = {}
     imgidx = []
+    print(header0)
     for identity in id_seq:
         s = imgrec.read_idx(identity)
         header, _ = unpack_fp64(s)
@@ -65,12 +70,18 @@ def static_baseline_dataset(rec_path, idx_path):
         id_num[identity] = id_end - id_start
         imgidx += list(range(*id2range[identity]))
 
-    print(len(id_seq))
-    print(len(imgidx))
+    last_idx = imgidx[-1]
+    s = imgrec.read_idx(last_idx)
+    header, _ = mx.recordio.unpack(s)
+    print("last idx: {}".format(last_idx))
+    print(header.label)
+    print("id len: {}".format(len(id_seq)))
+    #print(len(imgidx))
 
 
 def main():
-    static_pulic_dataset(j2[0], j2[1])
+    #static_pulic_dataset(abtdge_id1w[0], abtdge_id1w[1])
+    static_baseline_dataset(abtdge_id1w[0], abtdge_id1w[1])
     #static_pulic_dataset(ValID[0], ValID[1])
     #static_pulic_dataset(megaface[0], megaface[1])
 
