@@ -63,26 +63,26 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=20, sample_rate=0.1, weights_prefix=None):
+    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=12, sample_rate=0.1, weights_prefix=None):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
         self.total_batch_size = self.batch_size * self.world_size
-        self.num_classes = 500000
+        self.num_classes = 6024296
         self.emb_size = emb_size
 
         self.device = "cuda:{}".format(local_rank)
         self.backbone = None
         self.module_partial_fc = None
         self.loss_fn = None
-        self.num_image = 4800000
+        self.num_image = 13583364
         warmup_epoch = -1
         self.num_epoch = num_epoch
         self.fp16 = True
         self.warmup_step = self.num_image // self.total_batch_size * warmup_epoch
         self.total_step = self.num_image // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
-        self.decay_epoch = [8, 12, 15, 18]
+        self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
         self.weights_prefix = weights_prefix
 
@@ -122,7 +122,7 @@ class Trainer():
 
         self.opt_backbone = torch.optim.SGD(
             params=[{'params': self.backbone.parameters()}],
-            lr=lr / 512 * self.batch_size * self.world_size * 0.1,
+            lr=lr / 512 * self.batch_size * self.world_size,
             momentum=0.9, weight_decay=5e-4)
 
         self.scheduler_backbone = torch.optim.lr_scheduler.LambdaLR(
@@ -188,13 +188,13 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train")
     parser.add_argument("--gpu_num", type=int, default=8, help="")
-    parser.add_argument("--rec_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.rec", help="")
-    parser.add_argument("--idx_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx", help="")
-    parser.add_argument("--batch_size", type=int, default=32, help="")
+    parser.add_argument("--rec_path", type=str, default="/cluster_home/data/train_data/id_card/njn/small_njn.rec", help="")
+    parser.add_argument("--idx_path", type=str, default="/cluster_home/data/train_data/id_card/njn/small_njn.idx", help="")
+    parser.add_argument("--batch_size", type=int, default=128, help="")
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
-    parser.add_argument("--sample_rate", type=float, default=0.1, help="")
+    parser.add_argument("--sample_rate", type=float, default=1., help="")
     parser.add_argument("--resume", action="store_true", help="")
-    parser.add_argument("--weights_prefix", type=str, default="/home/users/han.tang/workspace/weight_imprint/imprint_weights", help="")
+    parser.add_argument("--weights_prefix", type=str, default="/cluster_home/weight_imprint/id_card", help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
     args = parser.parse_args()
     main(args)

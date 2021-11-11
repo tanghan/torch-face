@@ -36,6 +36,10 @@ dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint3
                     "/home/users/han.tang/data/test/val/Val30W/qry30w_V1.0_lmks_V0.2_clean0916_indexed.idx"],
         "Val30W_gallery": ["/home/users/han.tang/data/test/val/Val30W/gly30w_V1.0_lmks_V0.2_indexed.rec",
                     "/home/users/han.tang/data/test/val/Val30W/gly30w_V1.0_lmks_V0.2_indexed.idx"],
+        "njn": ["/cluster_home//data/train_data/id_card/njn/small_njn.rec",
+                    "/cluster_home//data/train_data/id_card/njn/small_njn.idx"],
+        "Val_J2_RealCar": ["/home/users/han.tang/data/test/val/Val_J2_RealCar/Val_J2_RealCar.rec",
+                    "/home/users/han.tang/data/test/val/Val_J2_RealCar/Val_J2_RealCar.idx"],
         }
 
 
@@ -96,28 +100,31 @@ class Eval(object):
 
 def build_dataset(bin_path, local_rank, batch_size, origin_prepro):
     dataset = MXBinFaceDataset(bin_path, local_rank)
+    total_num = len(dataset)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
         local_rank=local_rank, dataset=dataset, batch_size=batch_size,
         sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
-    return dataloader
+    return dataloader, total_num
 
 def build_rec_dataset(rec_path, idx_path, local_rank, batch_size, origin_prepro):
     dataset = MXTestFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank, origin_preprocess=origin_prepro)
+    total_num = len(dataset)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
         local_rank=local_rank, dataset=dataset, batch_size=batch_size,
         sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
-    return dataloader
+    return dataloader, total_num
 
 def build_baseline_dataset(rec_path, idx_path, local_rank, batch_size, origin_prepro):
     dataset = MXFaceDataset(rec_path=rec_path, idx_path=idx_path, local_rank=local_rank, origin_preprocess=origin_prepro, training=False)
 
+    total_num = len(dataset)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     dataloader = EvalDataLoader(
         local_rank=local_rank, dataset=dataset, batch_size=batch_size,
         sampler=sampler, num_workers=4, pin_memory=True, drop_last=False)
-    return dataloader
+    return dataloader, total_num
 
 def write_label_index(label_list, local_rank, dst_path):
     label_dict = defaultdict(list)
@@ -147,18 +154,21 @@ def run(args, rank, world_size):
     batch_size = args.batch_size
     test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=True)
     if dataset_type == "rec":
-        dataloader = build_rec_dataset(dataset_dict[dataset_name][0],
+        dataloader, total_num = build_rec_dataset(dataset_dict[dataset_name][0],
                 dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
     elif dataset_type == "baseline":
-        dataloader = build_baseline_dataset(dataset_dict[dataset_name][0],
+        dataloader, total_num = build_baseline_dataset(dataset_dict[dataset_name][0],
                 dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
     elif dataset_type == "lfw":
-        dataloader = build_dataset(dataset_dict[dataset_name][0], rank, batch_size=batch_size)
+        dataloader, total_num = build_dataset(dataset_dict[dataset_name][0], rank, batch_size=batch_size)
     else:
         raise AssertionError("not a good dataset name: {}".format(dataset_name))
 
 
-    total_num = 4799734
+    if total_num < 1:
+        raise AssertionError("total num error {}".format(total_num))
+
+    print("total process num: {}".format(total_num))
     remainder_num = total_num % world_size
     remainder_list = np.arange(remainder_num)
     save_num = total_num // world_size

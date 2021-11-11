@@ -33,7 +33,14 @@ class MXTestFaceDataset(Dataset):
 
         self.local_rank = local_rank
         self.imgrec = mx.recordio.MXIndexedRecordIO(idx_path, rec_path, "r")
-        self.imgidx = np.array(list(self.imgrec.keys))
+
+        s = self.imgrec.read_idx(0)
+        header, _ = mx.recordio.unpack(s)
+        if header.flag > 0:
+            self.imgidx = np.array(range(1, int(header.label[0])))
+        else:
+            self.imgidx = np.array(list(self.imgrec.keys))
+
         print("total img num: {}".format(len(self.imgidx)))
 
         self.image_size = image_size
@@ -43,6 +50,9 @@ class MXTestFaceDataset(Dataset):
         header, img = mx.recordio.unpack(s)
         img = mx.image.imdecode(img)
         label = header.label
+
+        if isinstance(label, float) is not True:
+            label = label[0]
 
         if img.shape[1] != self.image_size[0]:
             img = mx.image.resize_short(img, image_size[0])

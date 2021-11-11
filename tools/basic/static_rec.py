@@ -12,6 +12,12 @@ glint360k = ["/home/users/han.tang/data/public_face_data/glint/glint360k/train.r
 megaface = ["/home/users/han.tang/data/public_face_data/faces_megafacetrain_112x112/train.rec",
             "/home/users/han.tang/data/public_face_data/faces_megafacetrain_112x112/train.idx"]
 
+j2 = ["/home/users/han.tang/data/test/val/Val_J2_RealCar/Val_J2_RealCar.rec",
+            "/home/users/han.tang/data/test/val/Val_J2_RealCar/Val_J2_RealCar.idx"]
+
+ValID = ["/home/users/han.tang/data/test/val/ValID/wanren_V0.2_indexed.rec",
+            "/home/users/han.tang/data/test/val/ValID/wanren_V0.2_indexed.idx"]
+
 import mxnet as mx
 from utils.mx_rec_utils.parse_rec_utils import unpack_fp64
 
@@ -23,10 +29,19 @@ def static_pulic_dataset(rec_path, idx_path):
     if header.flag > 0:
         imgidx = np.array(range(1, int(header.label[0])))
     else:
-        imgidx = np.array(list(self.imgrec.keys))
+        imgidx = np.array(list(imgrec.keys))
+
     print(header.flag)  
     print(header.label)  
     print(len(imgidx))
+    print(imgidx[:5])
+    print(header)
+    for i in imgidx:
+        s = imgrec.read_idx(i)
+        header, raw_data = mx.recordio.unpack(s)
+        im = mx.image.imdecode(raw_data)
+        #print(im.shape)
+        #print(im.shape)
 
 
 
@@ -55,8 +70,9 @@ def static_baseline_dataset(rec_path, idx_path):
 
 
 def main():
-    #static_pulic_dataset(glint360k[0], glint360k[1])
-    static_pulic_dataset(megaface[0], megaface[1])
+    static_pulic_dataset(j2[0], j2[1])
+    #static_pulic_dataset(ValID[0], ValID[1])
+    #static_pulic_dataset(megaface[0], megaface[1])
 
 if __name__ == "__main__":
     main()

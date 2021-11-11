@@ -4,14 +4,28 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 import numpy as np
 import argparse
 
-def parse_feature(feature_dir, part_num, save_labels=False):
+def parse_feature(feature_dir, part_num, samples_num, save_labels=False):
     valid_part = np.arange(part_num)
 
     prefix_list = []
     feature_list = os.listdir(feature_dir)
     label_list = []
     fea_list = []
-    num = 0
+    num = samples_num
+    split_num = num // part_num
+    remainder = num % part_num
+
+    print(num)
+    print(split_num)
+    print("remainder: {}".format(remainder))
+    remainder_fea = []
+    remainder_label = []
+    padding_fea = np.zeros(shape=(1, 512), dtype=np.float32)
+    if remainder > 0:
+        padding_list = [i for i in range(remainder, part_num)]
+    else:
+        padding_list = []
+
     for i in valid_part:
         fea_path = os.path.join(feature_dir, "{}.bin".format(i))
         if save_labels:
@@ -26,20 +40,20 @@ def parse_feature(feature_dir, part_num, save_labels=False):
                             break
                         label_id = int(line.strip().split()[0])
                         labels.append(label_id)
-
+                if i in padding_list:
+                    labels.append(-1)
             label_list.append(np.expand_dims(np.array(labels), -1))
-            print(label_list[i].shape)
+            print("label shape: {}".format(label_list[i].shape))
 
         fea = np.fromfile(fea_path, dtype=np.float32)
         fea = fea.reshape(-1, 512)
-        fea_list.append(fea)
-        num += len(fea)
 
-    print(num)
-    split_num = num // part_num
-    remainder = num % part_num
-    print(split_num)
-    print(remainder)
+        if i in padding_list:
+            print("do padding: {}".format(i))
+            fea = np.concatenate([fea, padding_fea])
+                            
+        fea_list.append(fea)
+
     features = np.concatenate(fea_list, -1)
     features = features.reshape(-1, 512)
     print(features.shape)
@@ -61,7 +75,7 @@ def main(args):
     total_num = args.total_num
     part_num = args.part_num
     save_labels = args.save_labels
-    features, label, index  = parse_feature(feature_dir, part_num, save_labels)
+    features, label, index  = parse_feature(feature_dir, part_num, total_num, save_labels)
     features = features[:total_num]
     dst_path = "feature.npy"
     dst_path = os.path.join(output_dir, dst_path)

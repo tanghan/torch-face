@@ -105,8 +105,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--part_num", type=int, default=4, help="")
-    parser.add_argument("--data_dir", type=str, default="/home/users/han.tang/workspace/weight_imprint", help="")
+    parser.add_argument("--part_num", type=int, default=8, help="")
+    parser.add_argument("--data_dir", type=str, default="/home/users/han.tang/workspace/weight_imprint/id_card", help="")
     parser.add_argument("--num_threads", type=int, default=20, help="")
     parser.add_argument("--emb_size", type=int, default=512, help="")
     args = parser.parse_args()

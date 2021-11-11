@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import torch.multiprocessing as mp
+from torch.utils.data import ConcatDataset
 
 from core.models.resnet import iresnet
 from core.modules.loss.losses import get_loss
@@ -23,12 +24,12 @@ from easydict import EasyDict as edict
 from importlib.machinery import SourceFileLoader
 
 
-def init_process(rank, world_size, args, fn):
+def init_process(rank, world_size, opt, fn):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12345"
     dist.init_process_group(backend='nccl',
 		rank=rank, world_size=world_size)
-    fn(args, rank, world_size)
+    fn(opt, rank, world_size)
 
 def run_train(opt, rank, world_size):
     torch.cuda.set_device(rank)
@@ -49,15 +50,18 @@ def run_train(opt, rank, world_size):
         batch_size_list.append(batch_size)
         num_classes_list.append(num_classes)
 
-    train_loader, train_sampler = get_dataloader(rank, opt, seed)
-    output_dir = args.output_dir
+    train_loader = get_dataloader(rank, opt, seed)
+    output_dir = opt.utils.checkpoint 
 
     init_logging(rank, output_dir)
 
     num_image = 17091657
     num_epoch = opt.utils.num_epoch
-    trainer = Trainer(rank, world_size, num_classes_list, num_samples_list)
-    total_step = num_image // (batch_size * num_epoch * world_size)
+    trainer = Trainer(rank, world_size, num_classes_list, num_samples_list, batch_size_list, 
+            trainset, num_epoch)
+    total_step = num_image // (batch_size_list[0] * num_epoch * world_size)
+
+    batch_size = sum(batch_size_list)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
@@ -94,7 +98,7 @@ def get_dataloader(local_rank, opt, seed):
         num_classes_list.append(num_classes)
         dataset_list.append(train_set)
 
-    dataset=ConcatDataset(dataset_list)
+    dataset = ConcatDataset(dataset_list)
     batch_sampler = DistributedMultiBatchSampler(samplers=sampler_list, 
             batch_size_list=batch_size_list, total_sample_num_list=total_samples_list)
     train_loader = DataLoaderX(
@@ -108,7 +112,6 @@ class Trainer():
             batch_size_list, dataset_name_list, num_epoch, emb_size=512, sample_rate=0.1):
         self.local_rank = local_rank
         self.world_size = world_size
-        self.batch_size = batch_size
         self.batch_size_list = batch_size_list
 
         self.total_batch_size = self.batch_size_list[0] * self.world_size
@@ -132,6 +135,7 @@ class Trainer():
         self.sample_rate = sample_rate
         self.opt_pfc_list = []
         self.scheduler_pfc_list = []
+        self.batch_size = sum(self.batch_size_list)
 
         self.prepare()
         self.batch_size_offset = [0]
@@ -151,7 +155,8 @@ class Trainer():
 
 
     def set_loss(self):
-        self.loss_fn = get_loss("cosface")
+        #self.loss_fn = get_loss("cosface")
+        pass
 
     def set_tail(self, loss_fn):
 
@@ -160,7 +165,7 @@ class Trainer():
             prefix = "./{}".format(dataname)
             module_partial_fc = PartialFC(
                 rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=False,
-                batch_size=batch_size, margin_softmax=loss_fn, num_classes=num_classes,
+                batch_size=batch_size, margin_softmax=get_loss("cosface"), num_classes=num_classes,
                 sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix=prefix)
             self.module_partial_fc_list.append(module_partial_fc)
 
@@ -203,32 +208,31 @@ class Trainer():
             features = F.normalize(self.backbone(img))
             x_grad_list = []
             loss_v_list = []
-            dataset_features = []
+            #dataset_features = []
+            x_grad_list = []
             loss_v = 0
-            for dataset_idx in len(self.dataset_name_list):
+            for dataset_idx in range(len(self.dataset_name_list)):
                 s = self.batch_size_offset[dataset_idx]
                 e = self.batch_size_offset[dataset_idx + 1]
                 feature_ = features[s:e, ]
-                dataset_features.append(feature_)
+                #dataset_features.append(feature_)
                 label_ = label[s:e, ]
-                x_grad, loss_v_ = self.module_partial_fc.forward_backward(label_, feature_, self.opt_pfc_list[dataset_idx])
+                x_grad, loss_v_ = self.module_partial_fc_list[dataset_idx].forward_backward(label_, feature_, self.opt_pfc_list[dataset_idx])
+                x_grad_list.append(x_grad)
                 loss_v += loss_v_
 
-                if self.fp16:
-                    feature_.backward(grad_amp.scale(x_grad))
-                else:
-                    feature_.backward(x_grad)
-
             if self.fp16:
+                features.backward(grad_amp.scale(torch.cat(x_grad_list)))
                 grad_amp.unscale_(self.opt_backbone)
                 clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
                 grad_amp.step(self.opt_backbone)
                 grad_amp.update()
             else:
+                features.backward(torch.cat(x_grad_list))
                 clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
                 opt_backbone.step()
 
-            for dataset_idx in len(self.dataset_name_list):
+            for dataset_idx in range(len(self.dataset_name_list)):
                 self.opt_pfc_list[dataset_idx].step()
                 self.module_partial_fc_list[dataset_idx].update()
                 self.opt_pfc_list[dataset_idx].zero_grad()
@@ -238,13 +242,12 @@ class Trainer():
             callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
             self.scheduler_backbone.step()
 
-            for dataset_idx in len(self.dataset_name_list):
+            for dataset_idx in range(len(self.dataset_name_list)):
                 self.scheduler_pfc_list[dataset_idx].step()
         total_step = global_step + step
         callback_checkpoint(total_step, self.backbone, None)
 
         return total_step        
-
 
 def main(args):
     config = args.config
