@@ -38,7 +38,7 @@ def run_train(args, rank, world_size):
     num_epoch = 12
 
     total_step = num_image // (batch_size * num_epoch * world_size)
-    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}".format(num_samples, num_classes, total_step, num_epoch))
+    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}".format(num_samples, num_classes, total_step, num_epoch, batch_size))
 
     trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, num_classes=num_classes, weights_prefix=args.weights_prefix)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
@@ -68,7 +68,7 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=12, sample_rate=0.1, num_classes=100000, num_image=1000000, weights_prefix=None):
+    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=12, sample_rate=0.1, num_classes=100000, num_image=1000000, weights_prefix="./", fc_prefix="./", resume=False):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
@@ -90,16 +90,18 @@ class Trainer():
         self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
         self.weights_prefix = weights_prefix
+        self.resume = resume
 
         self.prepare()
 
     def network_init(self):
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
 
-        if self.weights_prefix is not None:
+        if self.resume:
+            assert self.weights_prefix is not None
             backbone_pth = os.path.join(self.weights_prefix, "backbone.pth")
+            assert os.path.exists(backbone_pth)
             self.backbone.load_state_dict(torch.load(backbone_pth, map_location=torch.device(self.local_rank)))
-
             logging.info("resume network from {}".format(backbone_pth))
 
         self.backbone.to(self.device)
@@ -115,9 +117,9 @@ class Trainer():
     def set_tail(self, loss_fn):
 
         self.module_partial_fc = PartialFC(
-            rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=True,
+            rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=self.resume,
             batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes,
-            sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix=self.weights_prefix)
+            sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix=self.fc_prefix)
 
     def set_optimizer(self, lr):
         def lr_step_func(current_step):
@@ -201,7 +203,9 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
     parser.add_argument("--sample_rate", type=float, default=1., help="")
     parser.add_argument("--resume", action="store_true", help="")
-    parser.add_argument("--weights_prefix", type=str, default="/cluster_home/weight_imprint/id_card", help="")
+    parser.add_argument("--weights_prefix", type=str, default="./", help="")
+    parser.add_argument("--fc_prefix", type=str, default="./", help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
+    parser.add_argument("--fc_lr_rate", type=float, default=10., help="")
     args = parser.parse_args()
     main(args)
