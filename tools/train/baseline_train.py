@@ -29,6 +29,8 @@ def run_train(args, rank, world_size):
     torch.cuda.set_device(rank)
     batch_size = args.batch_size
     sample_rate = args.sample_rate
+    backbone_lr_ratio = args.backbone_lr_ratio
+
     train_loader, train_sampler, num_samples, num_classes = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
     output_dir = args.output_dir
 
@@ -38,9 +40,9 @@ def run_train(args, rank, world_size):
     num_epoch = 12
 
     total_step = num_image // (batch_size * num_epoch * world_size)
-    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}".format(num_samples, num_classes, total_step, num_epoch))
+    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, sample_rate: {}, backbone lr ratio: {}".format(num_samples, num_classes, total_step, num_epoch, sample_rate, backbone_lr_ratio))
 
-    trainer = Trainer(rank, world_size, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, num_classes=num_classes, weights_prefix=args.weights_prefix)
+    trainer = Trainer(rank, world_size, num_classes=num_classes, num_image=num_image, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_prefix=args.weights_prefix, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
@@ -68,7 +70,8 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, batch_size=128, emb_size=512, num_epoch=12, sample_rate=0.1, num_classes=100000, num_image=1000000, weights_prefix=None):
+    def __init__(self, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=512, num_epoch=12, 
+            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1.):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
@@ -89,16 +92,21 @@ class Trainer():
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
         self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
-        self.weights_prefix = weights_prefix
+        self.weights_path = weights_path
+        self.fc_prefix = fc_prefix
+
+        self.backbone_lr_ratio = backbone_lr_ratio
+        self.resume = resume
 
         self.prepare()
 
     def network_init(self):
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
 
-        if self.weights_prefix is not None:
-            backbone_pth = os.path.join(self.weights_prefix, "backbone.pth")
-            self.backbone.load_state_dict(torch.load(backbone_pth, map_location=torch.device(self.local_rank)))
+        if self.resume:
+
+            assert os.path.exists(self.weights_path)
+            self.backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
 
             logging.info("resume network from {}".format(backbone_pth))
 
@@ -115,7 +123,7 @@ class Trainer():
     def set_tail(self, loss_fn):
 
         self.module_partial_fc = PartialFC(
-            rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=True,
+            rank=self.local_rank, local_rank=self.local_rank, world_size=self.world_size, resume=self.resume,
             batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes,
             sample_rate=self.sample_rate, embedding_size=self.emb_size, prefix=self.weights_prefix)
 
@@ -129,7 +137,7 @@ class Trainer():
 
         self.opt_backbone = torch.optim.SGD(
             params=[{'params': self.backbone.parameters()}],
-            lr=lr / 512 * self.batch_size * self.world_size,
+            lr=lr / 512 * self.batch_size * self.world_size * self.backbone_lr_ratio,
             momentum=0.9, weight_decay=5e-4)
 
         self.scheduler_backbone = torch.optim.lr_scheduler.LambdaLR(
@@ -190,8 +198,6 @@ def main(args):
     for p in processes:
         p.join()
 
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train")
     parser.add_argument("--gpu_num", type=int, default=8, help="")
@@ -201,7 +207,9 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="/job_data/", help="")
     parser.add_argument("--sample_rate", type=float, default=1., help="")
     parser.add_argument("--resume", action="store_true", help="")
-    parser.add_argument("--weights_prefix", type=str, default="/cluster_home/weight_imprint/id_card", help="")
+    parser.add_argument("--weights_path", type=str, default=None, help="")
+    parser.add_argument("--fc_prefix", type=str, default=None, help="")
+    parser.add_argument("--backbone_ratio", type=float, default=0.1, help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
     args = parser.parse_args()
     main(args)
