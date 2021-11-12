@@ -30,20 +30,28 @@ def run_train(args, rank, world_size):
     batch_size = args.batch_size
     sample_rate = args.sample_rate
     backbone_lr_ratio = args.backbone_lr_ratio
+    weights_path = args.weights_path
+    fc_prefix = args.fc_prefix
+
+    output_dir = args.output_dir
+    assert os.path.isdir(output_dir)
+    if args.resume:
+        assert weights_path is not None
+        assert fc_prefix is not None
+        assert os.path.exists(weights_path)
 
     train_loader, train_sampler, num_samples, num_classes = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
-    output_dir = args.output_dir
 
     init_logging(rank, output_dir)
 
-    num_image = num_samples
+    num_images = num_samples
     num_epoch = 12
 
-    total_step = num_image // (batch_size * num_epoch * world_size)
+    total_step = num_images // (batch_size * num_epoch * world_size)
     print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}".format(num_samples,
         num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio))
 
-    trainer = Trainer(rank, world_size, num_classes=num_classes, num_image=num_image, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_prefix=args.weights_prefix, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio)
+    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=args.resume)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
@@ -84,12 +92,12 @@ class Trainer():
         self.backbone = None
         self.module_partial_fc = None
         self.loss_fn = None
-        self.num_image = num_image
+        self.num_images = num_images
         warmup_epoch = -1
         self.num_epoch = num_epoch
         self.fp16 = True
-        self.warmup_step = self.num_image // self.total_batch_size * warmup_epoch
-        self.total_step = self.num_image // self.total_batch_size * self.num_epoch
+        self.warmup_step = self.num_images // self.total_batch_size * warmup_epoch
+        self.total_step = self.num_images // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
         self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
@@ -105,7 +113,6 @@ class Trainer():
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
 
         if self.resume:
-            assert os.path.exists(self.weights_path)
             self.backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
 
             logging.info("resume network from {}".format(self.weights_path))
@@ -129,7 +136,7 @@ class Trainer():
 
     def set_optimizer(self, lr):
         def lr_step_func(current_step):
-            decay_step = [x * self.num_image // self.total_batch_size for x in self.decay_epoch]
+            decay_step = [x * self.num_images // self.total_batch_size for x in self.decay_epoch]
             if current_step < self.warmup_step:
                 return current_step / self.warmup_step
             else:
@@ -209,8 +216,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true", help="")
     parser.add_argument("--weights_path", type=str, default=None, help="")
     parser.add_argument("--fc_prefix", type=str, default=None, help="")
-    parser.add_argument("--backbone_ratio", type=float, default=0.1, help="")
+    parser.add_argument("--backbone_lr_ratio", type=float, default=0.1, help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
-    parser.add_argument("--fc_lr_rate", type=float, default=10., help="")
     args = parser.parse_args()
     main(args)
