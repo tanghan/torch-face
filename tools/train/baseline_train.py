@@ -32,6 +32,8 @@ def run_train(args, rank, world_size):
     backbone_lr_ratio = args.backbone_lr_ratio
     weights_path = args.weights_path
     fc_prefix = args.fc_prefix
+    loss_type = args.loss_type
+    resume = args.resume
 
     output_dir = args.output_dir
     assert os.path.isdir(output_dir)
@@ -48,10 +50,10 @@ def run_train(args, rank, world_size):
     num_epoch = 20
 
     total_step = num_images // (batch_size * num_epoch * world_size)
-    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}".format(num_samples,
-        num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio))
+    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}".format(num_samples,
+        num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume))
 
-    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=args.resume)
+    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
@@ -80,7 +82,7 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 class Trainer():
 
     def __init__(self, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=512, num_epoch=12, 
-            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1.):
+            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface"):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
@@ -107,6 +109,7 @@ class Trainer():
 
         self.backbone_lr_ratio = backbone_lr_ratio
         self.resume = resume
+        self.loss_type = loss_type
 
         self.prepare()
 
@@ -126,7 +129,8 @@ class Trainer():
 
 
     def set_loss(self):
-        self.loss_fn = get_loss("cosface")
+        #self.loss_fn = get_loss("arcface")
+        self.loss_fn = get_loss(self.loss_type)
 
     def set_tail(self, loss_fn):
 
@@ -216,8 +220,9 @@ if __name__ == "__main__":
     parser.add_argument("--sample_rate", type=float, default=1., help="")
     parser.add_argument("--resume", action="store_true", help="")
     parser.add_argument("--weights_path", type=str, default=None, help="")
-    parser.add_argument("--fc_prefix", type=str, default=None, help="")
+    parser.add_argument("--fc_prefix", type=str, default="./", help="")
     parser.add_argument("--backbone_lr_ratio", type=float, default=0.1, help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
+    parser.add_argument("--loss_type", type=str, default="arcface", help="")
     args = parser.parse_args()
     main(args)
