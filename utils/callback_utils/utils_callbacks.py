@@ -114,5 +114,5 @@ class CallBackModelCheckpoint(object):
             torch.save(backbone.module.state_dict(), path_module)
             logging.info("Pytorch Model Saved in '{}'".format(path_module))
 
-        if global_step > 100 and partial_fc is not None:
-            partial_fc.save_params()
+        #if global_step > 100 and partial_fc is not None:
+        #    partial_fc.save_params()
