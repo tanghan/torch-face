@@ -70,7 +70,7 @@ class HeadFactory:
             num_class = self.head_param['num_class'] # number of classes in the training set.
             margin = self.head_param['margin'] # O_p = 1 + margin, O_n = -margin.
             gamma = self.head_param['gamma'] # the scale facetor.
-            head = CircleLoss(feat_dim, num_class, margin, gamma)
+            head = CircleLoss(margin, gamma)
         elif self.head_type == 'CurricularFace':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.
