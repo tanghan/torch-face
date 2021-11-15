@@ -10,6 +10,7 @@ import torch.multiprocessing as mp
 
 from core.models.resnet import iresnet
 from core.modules.loss.losses import get_loss
+from core.modules.loss.head_def import HeadFactory
 from utils.callback_utils.utils_callbacks import CallBackVerification, CallBackLogging, CallBackModelCheckpoint
 from core.dataset.baseline_dataset import MXFaceDataset, DataLoaderX
 
@@ -110,6 +111,8 @@ class Trainer():
         self.backbone_lr_ratio = backbone_lr_ratio
         self.resume = resume
         self.loss_type = loss_type
+        self.head_conf = "config/head_conf.yaml"
+        self.head_factory = HeadFactory(self.loss_type, self.head_conf)
 
         self.prepare()
 
@@ -129,8 +132,10 @@ class Trainer():
 
 
     def set_loss(self):
-        #self.loss_fn = get_loss("arcface")
-        self.loss_fn = get_loss(self.loss_type)
+        #self.loss_fn = get_loss(self.loss_type)
+        self.loss_fn = self.head_factory.get_head()
+
+        
 
     def set_tail(self, loss_fn):
 
