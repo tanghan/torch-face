@@ -15,7 +15,7 @@ from mxnet import nd
 from core.dataset.transforms.base_transform import NormalizeTransformer, ToTensor, MirrorTransformer
 
 class MXTestFaceDataset(Dataset):
-    def __init__(self, rec_path, idx_path, local_rank, image_size=(112, 112), origin_preprocess=False ):
+    def __init__(self, rec_path, idx_path, local_rank, image_size=(112, 112), origin_preprocess=False):
         super(MXTestFaceDataset, self).__init__()
 
         if origin_preprocess:
@@ -26,7 +26,7 @@ class MXTestFaceDataset(Dataset):
                  ])
         else:
             self.transform = transforms.Compose(
-                [MirrorTransformer(),
+                [
                  NormalizeTransformer(bias=128., scale=0.078125),
                  ToTensor(),
                 ])
