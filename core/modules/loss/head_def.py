@@ -76,7 +76,7 @@ class HeadFactory:
             num_class = self.head_param['num_class'] # number of classes in the training set.
             margin = self.head_param['margin'] # cos(theta + margin).
             scale = self.head_param['scale'] # the scaling factor for cosine values.
-            head = CurricularFace(feat_dim, num_class, margin, scale)
+            head = CurricularFace(margin, scale)
         elif self.head_type == 'MV-Softmax':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.
