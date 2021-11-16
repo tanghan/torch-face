@@ -64,7 +64,7 @@ class HeadFactory:
             l_margin = self.head_param['l_margin']
             u_margin = self.head_param['u_margin']
             lamda = self.head_param['lamda']
-            head = MagFace(feat_dim, num_class, margin_am, scale, l_a, u_a, l_margin, u_margin, lamda)                                                                                                                        
+            head = MagFace(margin_am, scale, l_a, u_a, l_margin, u_margin, lamda)                                                                                                                        
         elif self.head_type == 'CircleLoss':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.

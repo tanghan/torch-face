@@ -6,6 +6,7 @@ import torch.distributed as dist
 from torch.nn import Module
 from torch.nn.functional import normalize, linear
 from torch.nn.parameter import Parameter
+from core.modules.loss.MagFace import MagFace
 
 
 class PartialFC(Module):
@@ -184,7 +185,11 @@ class PartialFC(Module):
         total_features.requires_grad = True
 
         logits = self.forward(total_features, norm_weight)
-        logits = self.margin_softmax(logits, total_label)
+        loss_g = None
+        if isinstance(self.margin_softmax, MagFace):
+            logits, loss_g = self.margin_softmax(logits, total_features, total_label)
+        else:
+            logits = self.margin_softmax(logits, total_label)
 
         with torch.no_grad():
             max_fc = torch.max(logits, dim=1, keepdim=True)[0]
@@ -214,7 +219,12 @@ class PartialFC(Module):
             grad[index] -= one_hot
             grad.div_(self.batch_size * self.world_size)
 
-        logits.backward(grad)
+        if isinstance(self.margin_softmax, MagFace):
+            logits.backward(grad, retain_graph=True)
+            loss_g = torch.mean(loss_g)
+            loss_g.backward()
+        else:
+            logits.backward(grad, retain_graph=False)
         if total_features.grad is not None:
             total_features.grad.detach_()
         x_grad: torch.Tensor = torch.zeros_like(features, requires_grad=True)
