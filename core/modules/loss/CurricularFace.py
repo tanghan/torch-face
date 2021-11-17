@@ -26,27 +26,37 @@ class CurricularFace(nn.Module):
         self.threshold = math.cos(math.pi - m)
         self.mm = math.sin(math.pi - m) * m
         self.local_rank = dist.get_rank()
+        self.world_size = dist.get_world_size()
         self.register_buffer('t', torch.zeros(1, device="cuda:{}".format(self.local_rank)))
 
     def forward(self, cos_theta: torch.Tensor, labels):
         cos_theta = cos_theta.clamp(-1, 1)  # for numerical stability
-        with torch.no_grad():
-            origin_cos = cos_theta.clone()
 
         valid_label_index = torch.where(labels != -1)[0]
-        target_logit = cos_theta[valid_label_index][torch.arange(0, cos_theta.size(0)), labels[valid_label_index]].view(-1, 1)
+        with torch.no_grad():
 
-        sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
-        cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m #cos(target+margin)
-        mask = cos_theta > cos_theta_m
-        final_target_logit = torch.where(target_logit > self.threshold, cos_theta_m, target_logit - self.mm)
+            total_target_logit = torch.zeros(cos_theta.size()[0], dtype=cos_theta.dtype, device=cos_theta.device)
+            #print("valid label index shape: {}, total target logits shape: {}, valid label shape: {}".format(valid_label_index.shape, total_target_logit.shape, cos_theta[valid_label_index, labels[valid_label_index]].shape))
+            total_target_logit.scatter_(0, valid_label_index, cos_theta[valid_label_index, labels[valid_label_index]])
+            #print("rank: {}, valid index: {}, total_target_logit: {}".format(self.local_rank, valid_label_index, total_target_logit))
+            dist.all_reduce(total_target_logit)
+            #print("rank: {}, total_target_logit: {}".format(self.local_rank, total_target_logit))
+            target_logit = total_target_logit.view(-1, 1)
+
+            sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
+            cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m #cos(target+margin)
+            mask = cos_theta > cos_theta_m
+        valid_target_logit = cos_theta[valid_label_index, labels[valid_label_index]]
+        valid_sin_theta = torch.sqrt(1.0 - torch.pow(valid_target_logit, 2))
+        valid_cos_theta_m = valid_target_logit * self.cos_m - valid_sin_theta * self.sin_m #cos(target+margin)
+        valid_final_target_logit = torch.where(valid_target_logit > self.threshold, valid_cos_theta_m, valid_target_logit - self.mm)
 
         hard_example = cos_theta[mask]
         with torch.no_grad():
             self.t = target_logit.mean() * 0.01 + (1 - 0.01) * self.t
 
         cos_theta[mask] = hard_example * (self.t + hard_example)
-        cos_theta.scatter_(1, labels[valid_label_index].data.view(-1, 1), final_target_logit[valid_label_index])
+        cos_theta[valid_label_index] = cos_theta[valid_label_index].scatter_(1, labels[valid_label_index, None], valid_final_target_logit.view(-1, 1))
         output = cos_theta * self.s
         return output
 
