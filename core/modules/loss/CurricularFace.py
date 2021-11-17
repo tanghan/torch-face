@@ -32,7 +32,9 @@ class CurricularFace(nn.Module):
         cos_theta = cos_theta.clamp(-1, 1)  # for numerical stability
         with torch.no_grad():
             origin_cos = cos_theta.clone()
-        target_logit = cos_theta[torch.arange(0, cos_theta.size(0)), labels].view(-1, 1)
+
+        valid_label_index = torch.where(labels != -1)[0]
+        target_logit = cos_theta[valid_label_index][torch.arange(0, cos_theta.size(0)), labels[valid_label_index]].view(-1, 1)
 
         sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
         cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m #cos(target+margin)
@@ -43,7 +45,6 @@ class CurricularFace(nn.Module):
         with torch.no_grad():
             self.t = target_logit.mean() * 0.01 + (1 - 0.01) * self.t
 
-        valid_label_index = torch.where(labels != -1)[0]
         cos_theta[mask] = hard_example * (self.t + hard_example)
         cos_theta.scatter_(1, labels[valid_label_index].data.view(-1, 1), final_target_logit[valid_label_index])
         output = cos_theta * self.s
