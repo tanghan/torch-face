@@ -28,9 +28,11 @@ class CircleLoss(Module):
 
         index_pos = torch.zeros(valid_label_index.size()[0], cos_theta.size()[1], device=cos_theta.device)        
         index_pos.scatter_(1, labels[valid_label_index, None], 1)
+
+        index_neg = torch.ones_like(cos_theta)        
+        index_neg[valid_label_index, labels[valid_label_index]] = 0.
+
         index_pos = index_pos.to(torch.bool)
-        index_neg = torch.ones(valid_label_index.size()[0], cos_theta.size()[1], device=cos_theta.device)        
-        index_neg.scatter_(1, labels[valid_label_index, None], 0)
         index_neg = index_neg.to(torch.bool)
 
         alpha_p = torch.clamp_min(self.O_p - cos_theta.detach(), min=0.)
@@ -41,6 +43,6 @@ class CircleLoss(Module):
 
         output = cos_theta * 1.0
         output[valid_label_index][index_pos] = logit_p[valid_label_index][index_pos]
-        output[valid_label_index][index_neg] = logit_n[valid_label_index][index_neg]
+        output[index_neg] = logit_n[index_neg]
         output *= self.gamma
         return output
