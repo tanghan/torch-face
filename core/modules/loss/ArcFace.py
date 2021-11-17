@@ -28,11 +28,12 @@ class ArcFace(Module):
         # 0 <= theta + m <= pi, ==> -m <= theta <= pi-m
         # because 0<=theta<=pi, so, we just have to keep theta <= pi-m, that is cos_theta >= cos(pi-m)
         cos_theta_m = torch.where(cos_theta > self.min_cos_theta, cos_theta_m, cos_theta-self.margin_am)
+
         valid_label_index = torch.where(labels != -1)[0]
-        index = torch.zeros_like(cos_theta)
+        index = torch.zeros(valid_label_index.size()[0], cos_theta.size()[1], device=cos_theta.device)
         index.scatter_(1, labels[valid_label_index, None], 1)
         index = index.to(torch.bool)
         output = cos_theta * 1.0
-        output[index] = cos_theta_m[index]
+        output[valid_label_index][index] = cos_theta_m[valid_label_index][index]
         output *= self.scale
         return output
