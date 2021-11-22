@@ -23,15 +23,15 @@ class CircleLoss(Module):
         self.delta_n = margin
 
     def forward(self, cos_theta: torch.Tensor, labels):
-        valid_label_index = torch.where(labels != -1)[0]
         cos_theta = cos_theta.clamp(-1, 1)
+        valid_label_index = torch.where(labels != -1)[0]
 
-        index_pos = torch.zeros(valid_label_index.size()[0], cos_theta.size()[1], device=cos_theta.device)        
-        index_pos.scatter_(1, labels[valid_label_index, None], 1)
-
-        index_neg = torch.ones_like(cos_theta)        
-        index_neg[valid_label_index, labels[valid_label_index]] = 0.
-
+        index_pos = torch.zeros_like(cos_theta)
+        valid_index_pos = index_pos[valid_label_index]
+        valid_index_pos.scatter_(1, labels[valid_label_index].view(-1, 1), 1)
+        index_pos[valid_label_index] = valid_index_pos
+        index_neg = 1 - index_pos
+        
         index_pos = index_pos.to(torch.bool)
         index_neg = index_neg.to(torch.bool)
 
@@ -42,7 +42,7 @@ class CircleLoss(Module):
         logit_n = alpha_n * (cos_theta - self.delta_n)
 
         output = cos_theta * 1.0
-        output[valid_label_index][index_pos] = logit_p[valid_label_index][index_pos]
+        output[index_pos] = logit_p[index_pos]
         output[index_neg] = logit_n[index_neg]
         output *= self.gamma
         return output
