@@ -16,7 +16,7 @@ from core.dataset.baseline_dataset import MXFaceDataset, DataLoaderX
 
 from core.modules.tail.dist_softmax import DistSoftmax
 from torch.nn.utils import clip_grad_norm_
-from utils.utils_amp import MaxClipGradScaler
+from torch.cuda.amp import GradScaler, autocast
 from utils.logging_utils.utils_logging import AverageMeter, init_logging
 
 def init_process(rank, world_size, args, fn):
@@ -61,11 +61,11 @@ def run_train(args, rank, world_size):
     global_step = 0 
     fp16=True
 
-    grad_amp = MaxClipGradScaler(batch_size, 128 * batch_size, growth_interval=100) if fp16 else None
     loss = AverageMeter()
+    scaler = GradScaler()
     for epoch in range(0, num_epoch):
         train_sampler.set_epoch(epoch)
-        total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
+        total_step = trainer.train(epoch, global_step, train_loader, scaler, loss, callback_logging, callback_checkpoint) 
         global_step = total_step
 
 def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro=False):
@@ -161,7 +161,7 @@ class Trainer():
             optimizer=self.opt_backbone, lr_lambda=lr_step_func)
 
         self.opt_pfc = torch.optim.SGD(
-            params=[{'params': self.module_partial_fc.parameters()}],
+            params=[{'params': self.module_fc.parameters()}],
             lr=lr / 512 * self.batch_size * self.world_size,
             momentum=0.9, weight_decay=5e-4)
         self.scheduler_pfc = torch.optim.lr_scheduler.LambdaLR(
@@ -173,32 +173,39 @@ class Trainer():
         self.set_tail(loss_fn=self.loss_fn)
         self.set_optimizer(lr=0.1)
 
-    def train(self, epoch, global_step, train_loader, grad_amp, loss,
+    
+    def train(self, epoch, global_step, train_loader, scaler, loss,
             callback_logging, callback_checkpoint):
         for step, (img, label) in enumerate(train_loader):
-            features = F.normalize(self.backbone(img))
-            x_grad, loss_v = self.module_partial_fc.forward_backward(label, features, self.opt_pfc)
+
             if self.fp16:
-                features.backward(grad_amp.scale(x_grad))
-                grad_amp.unscale_(self.opt_backbone)
-                clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
-                grad_amp.step(self.opt_backbone)
-                grad_amp.update()
+                with autocast():
+                    features = self.backbone(img)
+            else:
+                features = self.backbone(img)
+            features = F.normalize(features)
+            loss_v, loss_g = self.module_fc(features, label)
+
+            if self.fp16:
+                scaler.scale(loss_v).backward()
+                scaler.unscale_(self.opt_backbone)
+                torch.nn.utils.clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
+                scaler.step(self.opt_backbone)
+                scaler.update()
             else:
                 features.backward(x_grad)
-                clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
-                opt_backbone.step()
+                torch.nn.utils.clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
+                self.opt_backbone.step()
 
             self.opt_pfc.step()
-            self.module_partial_fc.update()
             self.opt_backbone.zero_grad()
             self.opt_pfc.zero_grad()
             loss.update(loss_v, 1)
-            callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
+            callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], scaler)
             self.scheduler_backbone.step()
             self.scheduler_pfc.step()
         total_step = global_step + step
-        callback_checkpoint(total_step, self.backbone, self.module_partial_fc)
+        callback_checkpoint(total_step, self.backbone, self.module_fc)
 
         return total_step        
 

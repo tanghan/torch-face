@@ -3,10 +3,14 @@ import os
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
+
 from torch.nn import Module
 from torch.nn.functional import normalize, linear
 from torch.nn.parameter import Parameter
 from core.modules.loss.MagFace import MagFace
+
+from torch.autograd import Function
 
 
 class Matmul_(Function):
@@ -14,7 +18,7 @@ class Matmul_(Function):
     @staticmethod
     def forward(ctx, features, w, total_features):
         dist.all_reduce(total_features, dist.ReduceOp.SUM)
-        outputs = torch.mm(total_features, w)
+        outputs = F.linear(total_features, w)
         ctx.save_for_backward(total_features, w)
         return outputs
 
@@ -24,13 +28,13 @@ class Matmul_(Function):
         world_size = dist.get_world_size()
         total_features, w = ctx.saved_tensors
         batch_size = total_features.size()[0] // world_size
-        grad_logits = torch.mm(grad_output, torch.t(w))
+        grad_logits = torch.mm(grad_output, w)
         dist.all_reduce(grad_logits, dist.ReduceOp.SUM)
 
         grad_w = torch.mm(torch.t(total_features), grad_output)
         grad_logits.mul_(world_size)
 
-        return grad_logits[rank * batch_size:(rank + 1) * batch_size, ], grad_w, None
+        return grad_logits[rank * batch_size:(rank + 1) * batch_size, ], torch.t(grad_w), None
 
 class SoftmaxFunc_(Function):
 
@@ -76,7 +80,7 @@ class DistSoftmax(Module):
 
     @torch.no_grad()
     def __init__(self, rank, local_rank, world_size, batch_size, resume,
-                 margin_softmax, num_classes, embedding_size=512):
+                 margin_softmax, num_classes, embedding_size=512, prefix="./"):
         """
         rank: int
             Unique process(GPU) ID from 0 to world_size - 1.
@@ -93,9 +97,6 @@ class DistSoftmax(Module):
         num_classes: int
             The number of class center storage in current rank(CPU/GPU), usually is total_classes // world_size,
             required.
-        sample_rate: float
-            The partial fc sampling rate, when the number of classes increases to more than 2 millions, Sampling
-            can greatly speed up training, and reduce a lot of GPU memory, default is 1.0.
         embedding_size: int
             The feature dimension, default is 512.
         prefix: str
@@ -110,15 +111,13 @@ class DistSoftmax(Module):
         self.world_size: int = world_size
         self.batch_size: int = batch_size
         self.margin_softmax: callable = margin_softmax
-        self.sample_rate: float = sample_rate
         self.embedding_size: int = embedding_size
         self.prefix: str = prefix
         self.num_local: int = num_classes // world_size + int(rank < num_classes % world_size)
         self.class_start: int = num_classes // world_size * rank + min(rank, num_classes % world_size)
-        self.num_sample: int = int(self.sample_rate * self.num_local)
 
         self.weight_name = os.path.join(self.prefix, "rank_{}_softmax_weight.pt".format(self.rank))
-        total_features = torch.zeros(
+        self.total_features = torch.zeros(
             size=[self.batch_size * self.world_size, self.embedding_size], device=self.device, requires_grad=False)
 
         if resume:
@@ -170,7 +169,7 @@ class DistSoftmax(Module):
 
         loss_g = None
         if isinstance(self.margin_softmax, MagFace):
-            logits, loss_g = self.margin_softmax(logits, total_features, total_label)
+            logits, loss_g = self.margin_softmax(logits, self.total_features, total_label)
         else:
             logits = self.margin_softmax(logits, total_label)
 
@@ -192,5 +191,5 @@ class DistSoftmax(Module):
                 size=[self.batch_size * self.world_size], device=self.device, dtype=torch.long)
             dist.all_gather(list(total_label.chunk(self.world_size, dim=0)), label)
             self.sample(total_label)
-            norm_weight = normalize(self.weight, dim=0)
+            norm_weight = normalize(self.weight)
             return total_label, norm_weight

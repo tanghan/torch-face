@@ -8,9 +8,10 @@ TestInfo = namedtuple("TestInfo", ["dataset_name", "dataset_type", "total_num", 
 ijbc_info = TestInfo(dataset_name="ijbc", dataset_type="rec", total_num=469375, output_dir="/home/users/han.tang/data/eval/features/IJBC_V135PNGAff/cache_feature/subcenter")
 j2_info = TestInfo(dataset_name="Val_J2_RealCar", dataset_type="rec", total_num=2429, output_dir="/home/users/han.tang/data/eval/features/Val_J2_RealCar/cache_feature/subcenter")
 life_info = TestInfo(dataset_name="ValLife", dataset_type="rec", total_num=15498, output_dir="/home/users/han.tang/data/eval/features/ValLife/cache_feature/subcenter")
-id_info = TestInfo(dataset_name="ValID", dataset_type="rec", total_num=19897, output_dir="/home/users/han.tang/data/eval/features/ValLife/cache_feature/subcenter")
+id_info = TestInfo(dataset_name="ValID", dataset_type="rec", total_num=19897, output_dir="/home/users/han.tang/data/eval/features/ValID/cache_feature/subcenter")
 val30w_query_info = TestInfo(dataset_name="Val30W_query", dataset_type="rec", total_num=21669, output_dir="/home/users/han.tang/data/eval/features/Val30W/cache_feature/subcenter/query")
 val30w_gallery_info = TestInfo(dataset_name="Val30W_gallery", dataset_type="rec", total_num=300000, output_dir="/home/users/han.tang/data/eval/features/Val30W/cache_feature/subcenter/gallery")
+dms_info = TestInfo(dataset_name="Val_DMS_Car", dataset_type="baseline", total_num=4960, output_dir="/home/users/han.tang/data/eval/features/Val_DMS_Car/cache_feature/subcenter")
 
 test_list = []
 test_list.append(ijbc_info)
@@ -19,6 +20,7 @@ test_list.append(life_info)
 test_list.append(id_info)
 test_list.append(val30w_query_info)
 test_list.append(val30w_gallery_info)
+test_list.append(dms_info)
 
 
 def do_all_feature_extract(gpu_num, weight_path, batch_size):
