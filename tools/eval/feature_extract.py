@@ -76,7 +76,7 @@ class Eval(object):
         self.network_init()
 
     @torch.no_grad()
-    def eval(self, dataloader):
+    def eval(self, dataloader, norm=False):
         embeddings_list = []
         label_list = []
         index_list = []
@@ -94,6 +94,8 @@ class Eval(object):
                 index = -1
 
             out = self.backbone(imgs)
+            if norm:
+                out = F.normalize(out)
             if step % 100 == 0:
                 print("process {}".format(step))
             embeddings_list.append(out)
@@ -157,6 +159,7 @@ def run(args, rank, world_size):
     dataset_type = args.dataset_type
     batch_size = args.batch_size
     fp16 = args.fp16
+    norm = args.norm
 
     test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=fp16)
     if dataset_type == "rec":
@@ -180,7 +183,7 @@ def run(args, rank, world_size):
     save_num = total_num // world_size
     if rank in remainder_list:
         save_num += 1
-    embeddings_list, label_list, index_list = test.eval(dataloader)
+    embeddings_list, label_list, index_list = test.eval(dataloader, norm=norm)
     label_list = torch.cat(label_list)
     label_list = label_list[:save_num]
     embeddings_list = torch.cat(embeddings_list)
@@ -237,6 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="/home/users/han.tang/data/eval/features/", help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--fp16", action="store_true", help="")
+    parser.add_argument("--norm", action="store_true", help="")
     args = parser.parse_args()
     main(args)
 
