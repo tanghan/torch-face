@@ -212,7 +212,7 @@ class Trainer():
             self.scheduler_backbone.step()
         total_step = global_step + step
         callback_checkpoint_probe(total_step, self.probe_backbone, None, "probe-")
-        callback_checkpoint_gallery(total_step, self.gallery_backbone, None, "gallery-")
+        #callback_checkpoint_gallery(total_step, self.gallery_backbone, None, "gallery-")
 
         return total_step        
 

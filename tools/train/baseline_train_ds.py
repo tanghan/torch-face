@@ -35,6 +35,7 @@ def run_train(args, rank, world_size):
     fc_prefix = args.fc_prefix
     loss_type = args.loss_type
     resume = args.resume
+    fp16 = args.fp16
 
     output_dir = args.output_dir
     assert os.path.isdir(output_dir)
@@ -51,15 +52,14 @@ def run_train(args, rank, world_size):
     num_epoch = 20
 
     total_step = num_images // (batch_size * num_epoch * world_size)
-    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}".format(num_samples,
-        num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume))
+    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}, use fp16: {}".format(num_samples,
+        num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume, fp16))
 
-    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type)
+    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type, fp16=fp16)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(rank, output_dir)
 
     global_step = 0 
-    fp16=True
 
     loss = AverageMeter()
     scaler = GradScaler()
@@ -83,7 +83,7 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 class Trainer():
 
     def __init__(self, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=512, num_epoch=12, 
-            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface"):
+            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface", fp16=True):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
@@ -98,7 +98,7 @@ class Trainer():
         self.num_images = num_images
         warmup_epoch = -1
         self.num_epoch = num_epoch
-        self.fp16 = True
+        self.fp16 = fp16
         self.warmup_step = self.num_images // self.total_batch_size * warmup_epoch
         self.total_step = self.num_images // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
@@ -178,11 +178,7 @@ class Trainer():
             callback_logging, callback_checkpoint):
         for step, (img, label) in enumerate(train_loader):
 
-            if self.fp16:
-                with autocast():
-                    features = self.backbone(img)
-            else:
-                features = self.backbone(img)
+            features = self.backbone(img)
             features = F.normalize(features)
             loss_v, loss_g = self.module_fc(features, label)
 
@@ -193,7 +189,7 @@ class Trainer():
                 scaler.step(self.opt_backbone)
                 scaler.update()
             else:
-                features.backward(x_grad)
+                loss_v.backward()
                 torch.nn.utils.clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
                 self.opt_backbone.step()
 
@@ -236,5 +232,6 @@ if __name__ == "__main__":
     parser.add_argument("--backbone_lr_ratio", type=float, default=0.1, help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--loss_type", type=str, default="arcface", help="")
+    parser.add_argument("--fp16", action="store_true", help="")
     args = parser.parse_args()
     main(args)

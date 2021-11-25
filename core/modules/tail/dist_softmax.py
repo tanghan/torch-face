@@ -67,7 +67,7 @@ class SoftmaxFunc_(Function):
         one_hot.scatter_(1, total_labels[index, None], 1)
         grad[index] -= one_hot
         grad.div_(total_labels.size()[0])
-        return grad, None
+        return grad * grad_output, None
 
 
 class DistSoftmax(Module):

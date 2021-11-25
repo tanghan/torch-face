@@ -156,7 +156,9 @@ def run(args, rank, world_size):
     dataset_name = args.dataset
     dataset_type = args.dataset_type
     batch_size = args.batch_size
-    test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=True)
+    fp16 = args.fp16
+
+    test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=fp16)
     if dataset_type == "rec":
         dataloader, total_num = build_rec_dataset(dataset_dict[dataset_name][0],
                 dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
@@ -234,6 +236,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
     parser.add_argument("--output", type=str, default="/home/users/han.tang/data/eval/features/", help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
+    parser.add_argument("--fp16", action="store_true", help="")
     args = parser.parse_args()
     main(args)
 
