@@ -21,14 +21,19 @@ from utils.utils_amp import MaxClipGradScaler
 from utils.logging_utils.utils_logging import AverageMeter, init_logging
 from core.modules.loss.SST_Prototype import SST_Prototype
 
-def shuffle_BN(batch_size):
-    """ShuffleBN for batch, the same as MoCo https://arxiv.org/abs/1911.05722 #######
-    """
-    shuffle_ids = torch.randperm(batch_size).long().cuda()
-    reshuffle_ids = torch.zeros(batch_size).long().cuda()
-    reshuffle_ids.index_copy_(0, shuffle_ids, torch.arange(batch_size).long().cuda())
-    return shuffle_ids, reshuffle_ids
 
+@torch.no_grad()
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    *** Warning ***: torch.distributed.all_gather has no gradient.
+    """
+    tensors_gather = [torch.ones_like(tensor)
+        for _ in range(dist.get_world_size())]
+    dist.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output
 
 def init_process(rank, world_size, args, fn):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -137,6 +142,54 @@ class Trainer():
             param_gallery.data =  \
                 alpha* param_gallery.data + (1 - alpha) * param_probe.detach().data
 
+    @torch.no_grad()
+    def _batch_shuffle_ddp(self, x):
+        """
+        Batch shuffle, for making use of BatchNorm.
+        *** Only support DistributedDataParallel (DDP) model. ***
+        """
+        # gather from all gpus
+        batch_size_this = x.shape[0]
+        x_gather = concat_all_gather(x)
+        batch_size_all = x_gather.shape[0]
+
+        num_gpus = batch_size_all // batch_size_this
+
+        # random shuffle index
+        idx_shuffle = torch.randperm(batch_size_all).cuda()
+
+        # broadcast to all gpus
+        dist.broadcast(idx_shuffle, src=0)
+
+        # index for restoring
+        idx_unshuffle = torch.argsort(idx_shuffle)
+
+        # shuffled index for this gpu
+        gpu_idx = dist.get_rank()
+        idx_this = idx_shuffle.view(num_gpus, -1)[gpu_idx]
+
+        return x_gather[idx_this], idx_unshuffle
+
+    @torch.no_grad()
+    def _batch_unshuffle_ddp(self, x, idx_unshuffle):
+        """
+        Undo batch shuffle.
+        *** Only support DistributedDataParallel (DDP) model. ***
+        """
+        # gather from all gpus
+        batch_size_this = x.shape[0]
+        x_gather = concat_all_gather(x)
+        batch_size_all = x_gather.shape[0]
+
+        num_gpus = batch_size_all // batch_size_this
+
+        # restored index for this gpu
+        gpu_idx = dist.get_rank()
+        idx_this = idx_unshuffle.view(num_gpus, -1)[gpu_idx]
+
+        return x_gather[idx_this]
+
+
 
     def network_init(self):
         self.probe_backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
@@ -180,14 +233,23 @@ class Trainer():
             criterion, callback_logging, callback_checkpoint_probe, callback_checkpoint_gallery):
         for step, (imgs, labels) in enumerate(train_loader):
             probe_imgs, gallery_imgs = torch.split(imgs, 3, 1)
+            probe_imgs = probe_imgs.contiguous()
+            gallery_imgs = gallery_imgs.contiguous()
             #probe_label, gallery_label = torch.split(labels, 2, 1)
+
 
             probe_features1 = F.normalize(self.probe_backbone(probe_imgs))
             probe_features2 = F.normalize(self.probe_backbone(gallery_imgs))
 
             with torch.no_grad():
+                probe_imgs, probe_idx_unshuffle = self._batch_shuffle_ddp(probe_imgs)
                 gallery_features1 = F.normalize(self.gallery_backbone(probe_imgs))
+
+                gallery_imgs, gallery_idx_unshuffle = self._batch_shuffle_ddp(gallery_imgs)
                 gallery_features2 = F.normalize(self.gallery_backbone(gallery_imgs))
+
+                gallery_features1 = self._batch_unshuffle_ddp(gallery_features1, probe_idx_unshuffle)
+                gallery_features2 = self._batch_unshuffle_ddp(gallery_features2, gallery_idx_unshuffle)
 
             output1, output2, label, id_set  = self.prototype(
             probe_features1, gallery_features2, probe_features2, gallery_features1, labels)
