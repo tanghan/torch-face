@@ -21,17 +21,22 @@ def run(args, rank, size):
     total_sample_num = 3
 
     save_dir = "/home/users/han.tang/workspace/temp_data"
-    for data in dataloader:
-        if sample_idx > total_sample_num:
-            break
-        imgs, labels = data
-        img1s, img2s = torch.split(imgs, 3, 1)
-        img1s = img1s.cpu().numpy()
-        img2s = img2s.cpu().numpy()
-        batch_size = len(img1s)
-        labels = labels.cpu().numpy()
+    print_iter = 2000
+    for i in range(10):
+        for data in dataloader:
+            #if sample_idx > total_sample_num:
+            #    break
+            imgs, labels = data
+            img1s, img2s = torch.split(imgs, 3, 1)
+            img1s = img1s.cpu().numpy()
+            img2s = img2s.cpu().numpy()
+            batch_size = len(img1s)
+            labels = labels.cpu().numpy()
+            sample_idx += 1
+            if sample_idx % print_iter == 0:
+                print("current process idx: {}".format(sample_idx))
 
-
+        '''
         for batch_idx, (img1, img2, label) in enumerate(zip(img1s, img2s, labels)):
             label1, label2 = label
             save_path1 = "{}_1_{}_{}.jpg".format(batch_idx + sample_idx * batch_size, label1, rank)
@@ -48,6 +53,7 @@ def run(args, rank, size):
             cv2.imwrite(save_path1, im1)
             cv2.imwrite(save_path2, im2)
         sample_idx += 1
+        '''
 
 
 
@@ -70,7 +76,7 @@ def init_process(rank, world_size, args, fn):
 
 
 def main(args):
-    size = 2
+    size = args.gpu_num
     processes = []
     mp.set_start_method("spawn")
     for rank in range(size):
@@ -87,6 +93,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--rec_path", type=str, default="/home/users/han.tang/data/small_njn.rec", help="")
     parser.add_argument("--idx_path", type=str, default="/home/users/han.tang/data/small_njn.idx", help="")
+    parser.add_argument("--gpu_num", type=int, default=2, help="")
     #parser.add_argument("--local_rank", type=int, default=0, help="")
     #parser.add_argument("--world_size", type=int, default=1, help="")
     args= parser.parse_args()
