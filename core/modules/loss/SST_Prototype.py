@@ -82,16 +82,16 @@ class SST_Prototype(Module):
         batch_size = p1.shape[0]
         label = (torch.LongTensor([range(batch_size)]) + self.index + self.local_rank * batch_size)
         label = label.squeeze().to(self.device)
-        g1 = g1.detach()
-        g2 = g2.detach()
+        d_g1 = g1.clone().detach()
+        d_g2 = g2.clone().detach()
         self.total_labels.zero_()
-        self.total_labels[self.local_rank * batch_size: (self.local_rank + 1) * batch_size, ] = cur_ids
+        self.total_labels[self.local_rank * batch_size: (self.local_rank + 1) * batch_size, ] = cur_ids.clone().detach()
         dist.all_reduce(self.total_labels, dist.ReduceOp.SUM)
 
         self.exchange_fea_g1.zero_()
         self.exchange_fea_g2.zero_()
-        self.exchange_fea_g1[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(g1)
-        self.exchange_fea_g2[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(g2)
+        self.exchange_fea_g1[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(d_g1)
+        self.exchange_fea_g2[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(d_g2)
         dist.all_reduce(self.exchange_fea_g1, dist.ReduceOp.SUM)
         dist.all_reduce(self.exchange_fea_g2, dist.ReduceOp.SUM)
 

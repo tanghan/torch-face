@@ -35,7 +35,8 @@ def do_all_feature_extract(gpu_num, weight_path, batch_size):
         command_feature_extract += "--dataset_type {} ".format(dataset_type)
         command_feature_extract += "--gpu_num {} ".format(gpu_num)
         command_feature_extract += "--weight_path {} ".format(weight_path)
-        command_feature_extract += "--batch_size {}".format(batch_size)
+        command_feature_extract += "--batch_size {} ".format(batch_size)
+        command_feature_extract += "--norm"
         print(command_feature_extract)
         assert os.system(command_feature_extract) == 0
 
