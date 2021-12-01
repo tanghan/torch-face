@@ -55,12 +55,13 @@ def main(args):
     output_dir = args.output_dir
     weights_dir = args.weights_dir
     num_classes = args.num_classes
+    world_size = args.world_size
     assert os.path.isdir(output_dir)
     assert os.path.isdir(weights_dir)
 
     imprint_list = parse_mean_fea_path(weights_dir)
     feas = combine_imprint_list(imprint_list)
-    save_rank_weights(feas, num_classes, prefix=output_dir)
+    save_rank_weights(feas, num_classes, world_size, prefix=output_dir)
 
 
 if __name__ == "__main__":
@@ -68,6 +69,7 @@ if __name__ == "__main__":
     parser.add_argument("--weights_dir", type=str, default=None, help="")
     parser.add_argument("--output_dir", type=str, default=None, help="")
     parser.add_argument("--num_classes", type=int, default=None, help="")
+    parser.add_argument("--world_size", type=int, default=None, help="")
     args = parser.parse_args()
     main(args)
 

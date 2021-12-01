@@ -12,7 +12,7 @@ from torch.nn import Module, Parameter
 class ArcFace(Module):
     """Implementation for "ArcFace: Additive Angular Margin Loss for Deep Face Recognition"
     """
-    def __init__(self, margin_arc=0.5, margin_am=0.0, scale=64.):
+    def __init__(self, local_rank, world_size, margin_arc=0.5, margin_am=0.0, scale=64.):
         super(ArcFace, self).__init__()
         self.margin_arc = margin_arc
         self.margin_am = margin_am
@@ -20,6 +20,8 @@ class ArcFace(Module):
         self.cos_margin = math.cos(margin_arc)
         self.sin_margin = math.sin(margin_arc)
         self.min_cos_theta = math.cos(math.pi - margin_arc)
+        self.local_rank = local_rank
+        self.world_size = world_size
 
     def forward(self, cos_theta: torch.Tensor, labels):
         cos_theta = cos_theta.clamp(-1, 1)

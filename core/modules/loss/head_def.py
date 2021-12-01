@@ -25,18 +25,21 @@ class HeadFactory:
         head_type(str): which head will be produce.
         head_param(dict): parsed params and it's value.
     """
-    def __init__(self, head_type, head_conf_file):
+    def __init__(self, local_rank, world_size, head_type, head_conf_file):
         self.head_type = head_type
         with open(head_conf_file) as f:
             head_conf = yaml.load(f, Loader=yaml.FullLoader)
             self.head_param = head_conf[head_type]
         print('head param:')
         print(self.head_param)
+        self.local_rank = local_rank
+        self.world_size = world_size
+
     def get_head(self):
         if self.head_type == 'AdaCos':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.
-            head = AdaCos(feat_dim, num_class)
+            head = AdaCos(self.local_rank, self.world_size, feat_dim, num_class)
         elif self.head_type == 'AdaM-Softmax':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in training set.
@@ -48,12 +51,12 @@ class HeadFactory:
             num_class = self.head_param['num_class'] # number of classes in the training set.
             margin = self.head_param['margin'] # cos_theta - margin
             scale = self.head_param['scale'] # the scaling factor for cosine values.
-            head = AM_Softmax(feat_dim, num_class, margin, scale)
+            head = AM_Softmax(self.local_rank, self.world_size, feat_dim, num_class, margin, scale)
         elif self.head_type == 'ArcFace':
             margin_arc = self.head_param['margin_arc'] # cos(theta + margin_arc).
             margin_am = self.head_param['margin_am'] # cos_theta - margin_am.
             scale = self.head_param['scale'] # the scaling factor for cosine values.
-            head = ArcFace(margin_arc, margin_am, scale)
+            head = ArcFace(self.local_rank, self.world_size, margin_arc, margin_am, scale)
         elif self.head_type == 'MagFace':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512
             num_class = self.head_param['num_class'] # number of classes in the training set.
@@ -64,19 +67,19 @@ class HeadFactory:
             l_margin = self.head_param['l_margin']
             u_margin = self.head_param['u_margin']
             lamda = self.head_param['lamda']
-            head = MagFace(margin_am, scale, l_a, u_a, l_margin, u_margin, lamda)                                                                                                                        
+            head = MagFace(self.local_rank, self.world_size, margin_am, scale, l_a, u_a, l_margin, u_margin, lamda)                                                                                                                        
         elif self.head_type == 'CircleLoss':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.
             margin = self.head_param['margin'] # O_p = 1 + margin, O_n = -margin.
             gamma = self.head_param['gamma'] # the scale facetor.
-            head = CircleLoss(margin, gamma)
+            head = CircleLoss(self.local_rank, self.world_size, margin, gamma)
         elif self.head_type == 'CurricularFace':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.
             margin = self.head_param['margin'] # cos(theta + margin).
             scale = self.head_param['scale'] # the scaling factor for cosine values.
-            head = CurricularFace(margin, scale)
+            head = CurricularFace(self.local_rank, self.world_size, margin, scale)
         elif self.head_type == 'MV-Softmax':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.
@@ -97,7 +100,7 @@ class HeadFactory:
             scale = self.head_param['scale'] # the scaling factor for cosine values.
             loss_type = self.head_param['loss_type'] # softmax, am-softmax, ...
             margin = self.head_param['margin'] # margin for certrain loss.
-            head = SST_Prototype(feat_dim, queue_size, scale, loss_type, margin)
+            head = SST_Prototype(self.local_rank, self.world_size, feat_dim, queue_size, scale, loss_type, margin)
         elif self.head_type == 'ArcNegFace':
             feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 512 
             num_class = self.head_param['num_class'] # number of classes in the training set.

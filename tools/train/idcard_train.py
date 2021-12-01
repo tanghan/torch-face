@@ -48,14 +48,15 @@ def run_train(args, rank, world_size):
     sample_rate = args.sample_rate
     backbone_lr_ratio = args.backbone_lr_ratio
     probe_weights_path = args.probe_weights_path
+    gallery_weights_path = args.gallery_weights_path
     loss_type = args.loss_type
     resume = args.resume
 
     output_dir = args.output_dir
     assert os.path.isdir(output_dir)
     if args.resume:
-        assert weights_path is not None
-        assert os.path.exists(weights_path)
+        assert probe_weights_path is not None
+        assert os.path.exists(probe_weights_path)
 
     train_loader, train_sampler, num_samples, num_classes = get_dataloader(args.rec_path, args.idx_path, rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
 
@@ -68,7 +69,8 @@ def run_train(args, rank, world_size):
     print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}".format(num_samples,
         num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume))
 
-    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, probe_weights_path=probe_weights_path, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type)
+    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, probe_weights_path=probe_weights_path, gallery_weights_path=gallery_weights_path, 
+            backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
     callback_checkpoint_probe = CallBackModelCheckpoint(rank, output_dir)
     callback_checkpoint_gallery = CallBackModelCheckpoint(rank, output_dir)
@@ -100,7 +102,7 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 class Trainer():
 
     def __init__(self, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=512, num_epoch=12, 
-            sample_rate=0.1, resume=True, probe_weights_path="./", backbone_lr_ratio=1., loss_type="cosface"):
+            sample_rate=0.1, resume=True, probe_weights_path="./", gallery_weights_path=None, backbone_lr_ratio=1., loss_type="cosface"):
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
@@ -124,6 +126,7 @@ class Trainer():
         #self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
         self.probe_weights_path = probe_weights_path
+        self.gallery_weights_path = gallery_weights_path
 
         self.backbone_lr_ratio = backbone_lr_ratio
         self.resume = resume
@@ -197,7 +200,8 @@ class Trainer():
 
         if self.resume:
             self.probe_backbone.load_state_dict(torch.load(self.probe_weights_path, map_location=torch.device(self.local_rank)))
-            self.gallery_backbone.load_state_dict(torch.load(self.gallery_weights_path, map_location=torch.device(self.local_rank)))
+            if self.gallery_weights_path is not None:
+                self.gallery_backbone.load_state_dict(torch.load(self.gallery_weights_path, map_location=torch.device(self.local_rank)))
 
             logging.info("resume probe network from {}, gallery network from {}".format(self.probe_weights_path, self.gallery_weights_path))
 
@@ -240,7 +244,6 @@ class Trainer():
             gallery_imgs = gallery_imgs.contiguous()
             #probe_label, gallery_label = torch.split(labels, 2, 1)
 
-
             probe_features1 = F.normalize(self.probe_backbone(probe_imgs))
             probe_features2 = F.normalize(self.probe_backbone(gallery_imgs))
 
@@ -255,7 +258,7 @@ class Trainer():
                 gallery_features2 = self._batch_unshuffle_ddp(gallery_features2, gallery_idx_unshuffle)
 
             output1, output2, label, id_set  = self.prototype(
-            probe_features1, gallery_features2, probe_features2, gallery_features1, labels)
+                probe_features1, gallery_features2, probe_features2, gallery_features1, labels)
 
             loss_v = (criterion(output1, label) + criterion(output2, label))/2
 
@@ -275,6 +278,7 @@ class Trainer():
             self.moving_average(self.alpha)
             callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
             self.scheduler_backbone.step()
+
         total_step = global_step + step
         callback_checkpoint_probe(total_step, self.probe_backbone, None, "probe-")
         callback_checkpoint_gallery(total_step, self.gallery_backbone, None, "gallery-")
@@ -307,7 +311,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample_rate", type=float, default=1., help="")
     parser.add_argument("--resume", action="store_true", help="")
     parser.add_argument("--probe_weights_path", type=str, default=None, help="")
-    parser.add_argument("--galley_weights_path", type=str, default=None, help="")
+    parser.add_argument("--gallery_weights_path", type=str, default=None, help="")
     parser.add_argument("--backbone_lr_ratio", type=float, default=1., help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--loss_type", type=str, default="arcface", help="")

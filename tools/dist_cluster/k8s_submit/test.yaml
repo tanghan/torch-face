@@ -1,0 +1,16 @@
+REQUIRED:
+#WARNNING: JOB_NAME must be uniq
+  JOB_NAME: "example_pytorch_dist"
+  JOB_PASSWD: "newk8s666"
+  UPLOAD_DIR: "k8s_job"
+  WORKER_MIN_NUM: 2
+  WORKER_MAX_NUM: 2
+  GPU_PER_WORKER: 8
+  PROJECT_ID: "PDT2020004"
+  RUN_SCRIPTS: "${WORKING_PATH}/job.sh"
+OPTIONAL:
+  PRIORITY: 3   #[1-5], highest:5
+    #DOCKER_IMAGE: "docker.hobot.cc/imagesys/hdlt:fsd_multitask-cu10-20210617-v0.0"
+  DOCKER_IMAGE: "docker.hobot.cc/imagesys/hdlt:fsd_multitask-cu11-20210616-v0.1"
+  WALL_TIME: 7200   # max run minutes: default 7200 = 5days
+

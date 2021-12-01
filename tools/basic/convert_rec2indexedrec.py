@@ -27,7 +27,7 @@ def test_write(rec_path, dst_rec_path, dst_idx_path):
         idx += 1
     index_rec.close()
     src_rec.close()
-    print(idx)
+    print("total num:", idx)
 
 def test_read(rec_path, dst_rec_path, dst_idx_path):
 
