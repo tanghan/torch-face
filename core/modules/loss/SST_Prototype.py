@@ -67,9 +67,11 @@ class SST_Prototype(Module):
 
     def get_id_set(self):
         id_set = set()
+        '''
         for label in self.label_list:
             if label != -1:
                 id_set.add(label)
+        '''
         return id_set
 
     def forward(self, p1, g2, p2, g1, cur_ids):
@@ -97,6 +99,8 @@ class SST_Prototype(Module):
 
         output1 = self.compute_theta(p1, self.exchange_fea_g2, label, batch_size)
         output2 = self.compute_theta(p2, self.exchange_fea_g1, label, batch_size)
+        output1 = torch.mm(p1, self.queue)
+        output2 = torch.mm(p2, self.queue)
         output1 *= self.scale
         output2 *= self.scale
 
