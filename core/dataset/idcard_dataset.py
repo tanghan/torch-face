@@ -69,22 +69,26 @@ class MXIDCardDataset(Dataset):
         idx_list = self.pair_identity[index]
         sample_list = []
         label_list = []
-        for idx in idx_list:
+        def _get_img(idx):
             s = self.imgrec.read_idx(idx)
-            header, img = unpack_fp64(s)
+            header, raw_data = unpack_fp64(s)
             label = header.label
 
             if not isinstance(label, numbers.Number):
                 label = label[0]
             label = torch.tensor(label, dtype=torch.long)
-            sample = mx.image.imdecode(img).asnumpy()
-            if self.transform is not None:
-                sample = self.transform(sample)
-            sample_list.append(sample) 
+            img = mx.image.imdecode(raw_data).asnumpy()
+            return img, label
+        probe_img, label = _get_img(idx_list[0])
+        if self.transform is not None:
+            probe_img = self.transform(probe_img)
+
+        gallery_img, _ = _get_img(idx_list[1])
+        if self.transform is not None:
+            gallery_img = self.transform(gallery_img)
             #label_list.append(label)
-        samples = torch.cat(sample_list, dim=0)
         #labels = torch.cat(label_list)
-        return samples, label
+        return probe_img, gallery_img, label
 
     def __len__(self):
         return len(self.pair_identity)

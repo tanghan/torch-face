@@ -238,14 +238,17 @@ class Trainer():
 
     def train(self, epoch, global_step, train_loader, grad_amp, loss,
             criterion, callback_logging, callback_checkpoint_probe, callback_checkpoint_gallery):
-        for step, (imgs, labels) in enumerate(train_loader):
-            probe_imgs, gallery_imgs = torch.split(imgs, 3, 1)
-            probe_imgs = probe_imgs.contiguous()
-            gallery_imgs = gallery_imgs.contiguous()
+        
+        for step, (probe_imgs, gallery_imgs, labels) in enumerate(train_loader):
+            #probe_imgs, gallery_imgs = torch.split(imgs, 3, 1)
+            #probe_imgs = probe_imgs.contiguous()
+            #gallery_imgs = gallery_imgs.contiguous()
             #probe_label, gallery_label = torch.split(labels, 2, 1)
+            #total_imgs = torch.cat([probe_imgs, gallery_imgs], dim=0)
 
             probe_features1 = F.normalize(self.probe_backbone(probe_imgs))
             probe_features2 = F.normalize(self.probe_backbone(gallery_imgs))
+            #probe_features = F.normalize(self.probe_backbone(total_imgs))
 
             with torch.no_grad():
                 probe_imgs, probe_idx_unshuffle = self._batch_shuffle_ddp(probe_imgs)
@@ -274,14 +277,13 @@ class Trainer():
                 self.opt_backbone.step()
 
             self.opt_backbone.zero_grad()
-            loss.update(loss_v, 1)
             self.moving_average(self.alpha)
             callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
             self.scheduler_backbone.step()
 
         total_step = global_step + step
-        callback_checkpoint_probe(total_step, self.probe_backbone, None, "probe-")
-        callback_checkpoint_gallery(total_step, self.gallery_backbone, None, "gallery-")
+        #callback_checkpoint_probe(total_step, self.probe_backbone, None, "probe-")
+        #callback_checkpoint_gallery(total_step, self.gallery_backbone, None, "gallery-")
         #save_gallery_backbone_path = "gallery-backbone.pth"
         #if self.local_rank == 0:
         #    torch.save(self.gallery_backbone.state_dict(), save_gallery_backbone_path)

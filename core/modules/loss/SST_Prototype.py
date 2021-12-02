@@ -56,7 +56,7 @@ class SST_Prototype(Module):
         #queue[:,self.index:self.index+batch_size * self.world_size] = g
         #cos_theta = torch.mm(p, queue.detach())
         cos_theta = torch.mm(p, self.queue.detach())
-        cos_theta = self.add_margin(cos_theta, label,batch_size)
+        #cos_theta = self.add_margin(cos_theta, label,batch_size)
         return cos_theta
 
     def update_queue(self, g, cur_ids, batch_size):
@@ -68,9 +68,11 @@ class SST_Prototype(Module):
 
     def get_id_set(self):
         id_set = set()
+        '''
         for label in self.label_list:
             if label != -1:
                 id_set.add(label)
+        '''
         return id_set
 
     def forward(self, p1, g2, p2, g1, cur_ids):
@@ -96,23 +98,25 @@ class SST_Prototype(Module):
         dist.all_reduce(self.exchange_fea_g1, dist.ReduceOp.SUM)
         dist.all_reduce(self.exchange_fea_g2, dist.ReduceOp.SUM)
 
-        output1 = self.compute_theta(p1, self.exchange_fea_g2, label, batch_size)
-        output2 = self.compute_theta(p2, self.exchange_fea_g1, label, batch_size)
+        #output1 = self.compute_theta(p1, self.exchange_fea_g2, label, batch_size)
+        #output2 = self.compute_theta(p2, self.exchange_fea_g1, label, batch_size)
+        output1 = torch.mm(p1, self.queue)
+        output2 = torch.mm(p2, self.queue)
         output1 *= self.scale
         output2 *= self.scale
 
+        '''
         with torch.no_grad():
-            '''
             if self.rng.uniform(size=1, low=0., high=1.) > 0.5:
                 self.queue[:,self.index:self.index+batch_size * self.world_size] = self.exchange_fea_g1
             else:
                 #self.update_queue(self.exchange_fea_g2, self.total_labels, batch_size * self.world_size) 
                 self.queue[:,self.index:self.index+batch_size * self.world_size] = self.exchange_fea_g2
-            '''
 
             for image_id in range(batch_size * self.world_size):
                 self.label_list[self.index + image_id] = self.total_labels[image_id].item()
             self.index = (self.index + batch_size * self.world_size) % self.queue_size
+        '''
 
         id_set = self.get_id_set()
         return output1, output2, label, id_set

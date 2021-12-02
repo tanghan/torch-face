@@ -11,7 +11,7 @@ life_info = TestInfo(dataset_name="ValLife", dataset_type="rec", total_num=15498
 id_info = TestInfo(dataset_name="ValID", dataset_type="rec", total_num=19897, output_dir="/home/users/han.tang/data/eval/features/ValID/cache_feature/subcenter")
 val30w_query_info = TestInfo(dataset_name="Val30W_query", dataset_type="rec", total_num=21669, output_dir="/home/users/han.tang/data/eval/features/Val30W/cache_feature/subcenter/query")
 val30w_gallery_info = TestInfo(dataset_name="Val30W_gallery", dataset_type="rec", total_num=300000, output_dir="/home/users/han.tang/data/eval/features/Val30W/cache_feature/subcenter/gallery")
-dms_info = TestInfo(dataset_name="Val_DMS_Car", dataset_type="rec", total_num=4960, output_dir="/home/users/han.tang/data/eval/features/Val_DMS_Car/cache_feature/subcenter")
+dms_info = TestInfo(dataset_name="Val_DMS_Car", dataset_type="rec", total_num=4677, output_dir="/home/users/han.tang/data/eval/features/Val_DMS_Car/cache_feature/subcenter")
 
 test_list = []
 #test_list.append(ijbc_info)
@@ -36,7 +36,8 @@ def do_all_feature_extract(gpu_num, weight_path, batch_size):
         command_feature_extract += "--gpu_num {} ".format(gpu_num)
         command_feature_extract += "--weight_path {} ".format(weight_path)
         command_feature_extract += "--batch_size {} ".format(batch_size)
-        command_feature_extract += "--norm"
+        command_feature_extract += "--norm "
+        command_feature_extract += "--fp16"
         print(command_feature_extract)
         assert os.system(command_feature_extract) == 0
 
@@ -57,7 +58,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="eval")
-    parser.add_argument("--gpu_num", type=int, default=2, help="")
+    parser.add_argument("--gpu_num", type=int, default=4, help="")
     parser.add_argument("--batch_size", type=int, default=512, help="")
     parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
     args = parser.parse_args()

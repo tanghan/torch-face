@@ -13,6 +13,7 @@ import pickle
 
 from mxnet import nd
 from core.dataset.transforms.base_transform import NormalizeTransformer, ToTensor, MirrorTransformer
+import cv2
 
 class MXTestFaceDataset(Dataset):
     def __init__(self, rec_path, idx_path, local_rank, image_size=(112, 112), origin_preprocess=False):
@@ -28,6 +29,8 @@ class MXTestFaceDataset(Dataset):
             self.transform = transforms.Compose(
                 [
                  NormalizeTransformer(bias=128., scale=0.078125),
+                 #NormalizeTransformer(bias=128., scale=0.16),
+                 #NormalizeTransformer(bias=64., scale=0.078125),
                  ToTensor(),
                 ])
 
@@ -57,7 +60,17 @@ class MXTestFaceDataset(Dataset):
         if img.shape[1] != self.image_size[0]:
             img = mx.image.resize_short(img, image_size[0])
         #img = nd.transpose(img, axes=(2, 0, 1))
-        img = self.transform(img.asnumpy())
+        #img = self.transform(img.asnumpy())
+        img = img.asnumpy()
+        '''
+        b, g, r = np.split(img, 3, -1)
+        bH = cv2.equalizeHist(b)
+        gH = cv2.equalizeHist(g)
+        rH = cv2.equalizeHist(r)
+        img = np.stack([bH, gH, rH], -1)
+        '''
+            
+        img = self.transform(img)
 
         return img, int(label), 0
 
