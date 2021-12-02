@@ -12,7 +12,7 @@ class CircleLoss(Module):
     """Implementation for "Circle Loss: A Unified Perspective of Pair Similarity Optimization"
     Note: this is the classification based implementation of circle loss.
     """
-    def __init__(self, margin=0.25, gamma=256):
+    def __init__(self, local_rank, world_size, margin=0.25, gamma=256):
         super(CircleLoss, self).__init__()
         self.margin = margin
         self.gamma = gamma
@@ -21,6 +21,8 @@ class CircleLoss(Module):
         self.O_n = -margin
         self.delta_p = 1-margin
         self.delta_n = margin
+        self.local_rank = local_rank
+        self.world_size = world_size
 
     def forward(self, cos_theta: torch.Tensor, labels):
         cos_theta = cos_theta.clamp(-1, 1)

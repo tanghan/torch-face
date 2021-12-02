@@ -17,7 +17,7 @@ import math
 class CurricularFace(nn.Module):
     """Implementation for "CurricularFace: Adaptive Curriculum Learning Loss for Deep Face Recognition".
     """
-    def __init__(self, m = 0.5, s = 64.):
+    def __init__(self, local_rank, world_size, m = 0.5, s = 64.):
         super(CurricularFace, self).__init__()
         self.m = m
         self.s = s
@@ -25,8 +25,8 @@ class CurricularFace(nn.Module):
         self.sin_m = math.sin(m)
         self.threshold = math.cos(math.pi - m)
         self.mm = math.sin(math.pi - m) * m
-        self.local_rank = dist.get_rank()
-        self.world_size = dist.get_world_size()
+        self.local_rank = local_rank
+        self.world_size = world_size
         self.register_buffer('t', torch.zeros(1, device="cuda:{}".format(self.local_rank)))
 
     def forward(self, cos_theta: torch.Tensor, labels):

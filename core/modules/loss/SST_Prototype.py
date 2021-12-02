@@ -52,10 +52,9 @@ class SST_Prototype(Module):
         return cos_theta
 
     def compute_theta(self, p, g, label, batch_size):
-        #queue = self.queue.clone()
-        #queue[:,self.index:self.index+batch_size * self.world_size] = g
-        #cos_theta = torch.mm(p, queue.detach())
-        cos_theta = torch.mm(p, self.queue.detach())
+        queue = self.queue.clone()
+        queue[:,self.index:self.index+batch_size * self.world_size] = g
+        cos_theta = torch.mm(p, queue.detach())
         cos_theta = self.add_margin(cos_theta, label,batch_size)
         return cos_theta
 
@@ -91,8 +90,8 @@ class SST_Prototype(Module):
 
         self.exchange_fea_g1.zero_()
         self.exchange_fea_g2.zero_()
-        #self.exchange_fea_g1[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(d_g1)
-        #self.exchange_fea_g2[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(d_g2)
+        self.exchange_fea_g1[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(d_g1)
+        self.exchange_fea_g2[:, self.local_rank * batch_size:(self.local_rank + 1) * batch_size] = torch.t(d_g2)
         dist.all_reduce(self.exchange_fea_g1, dist.ReduceOp.SUM)
         dist.all_reduce(self.exchange_fea_g2, dist.ReduceOp.SUM)
 
@@ -102,13 +101,11 @@ class SST_Prototype(Module):
         output2 *= self.scale
 
         with torch.no_grad():
-            '''
             if self.rng.uniform(size=1, low=0., high=1.) > 0.5:
                 self.queue[:,self.index:self.index+batch_size * self.world_size] = self.exchange_fea_g1
             else:
                 #self.update_queue(self.exchange_fea_g2, self.total_labels, batch_size * self.world_size) 
                 self.queue[:,self.index:self.index+batch_size * self.world_size] = self.exchange_fea_g2
-            '''
 
             for image_id in range(batch_size * self.world_size):
                 self.label_list[self.index + image_id] = self.total_labels[image_id].item()
