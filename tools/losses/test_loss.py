@@ -15,7 +15,14 @@ from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from core.modules.tail.partial_fc import PartialFC
 from core.modules.tail.dist_softmax import DistSoftmax 
-from core.models.resnet import iresnet
+from core.models.resnet import iresnet_test as iresnet
+from core.modules.loss.ArcFace import ArcFace
+from core.modules.local_loss.ArcFace import ArcFace as localArcFace
+from core.modules.local_loss.CircleLoss import CircleLoss as localCircleLoss
+from core.modules.loss.CircleLoss import CircleLoss
+from torch.cuda.amp import GradScaler
+from utils.utils_amp import MaxClipGradScaler
+from core.modules.loss.head_def import HeadFactory
 
 def init_process(rank, world_size, args, fn):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -24,46 +31,179 @@ def init_process(rank, world_size, args, fn):
 		rank=rank, world_size=world_size)
     fn(args, rank, world_size)
 
-def run_test(args, rank, world_size):
+def run_test(args, rank, world_size, fp16=False):
     torch.cuda.set_device(rank)
     batch_size = args.batch_size
     loss_type = args.loss_type
+    num_classes = 12
+    num_samples = 16
+    input_shape = (3, 112, 112)
 
+    partial = args.partial
     rng = np.random.RandomState(1234)
-    dataloaer = build_dataset(rng, batch_size)
+    if partial == 0:
+        batch_size = args.gpu_num * batch_size
+        world_size = args.gpu_num
+    print("start with partial {}".format(partial))
 
-    for data in dataloaer:
-        print(data)
+    dataloaer = build_dataset(rng, batch_size, num_classes, num_samples, input_shape)
+    head_factory = HeadFactory(rank, world_size, "CircleLoss", "./config/head_conf.yaml")
+    margin_softmax = head_factory.get_head()
+    #margin_softmax = CircleLoss(rank, world_size)
+    backbone, fc = build_model(rank, world_size, num_classes, batch_size, margin_softmax, fp16=fp16, partial=partial)
+    opt_backbone = torch.optim.SGD(
+            params=[{'params': backbone.parameters()}],
+            lr=0.1,
+            momentum=0.9, weight_decay=5e-4)
+    opt_pfc = torch.optim.SGD(
+        params=[{'params': fc.parameters()}],
+        lr=0.1,
+        momentum=0.9, weight_decay=5e-4)
 
-def build_dataset(rng, batch_size):
-    input_feat = rng.normal(size=(12, 4))
-    input_feat = torch.tensor(input_feat)
-    labels = rng.randint(low=0, high=10, size=(12, ))
+    loss_fn = torch.nn.CrossEntropyLoss()
+    #scaler = GradScaler()
+    grad_amp = MaxClipGradScaler(batch_size, 128 * batch_size, growth_interval=100) if fp16 else None
+    for data_idx, data in enumerate(dataloaer):
+        img, label = data
+        img = img.cuda(rank)
+        label = label.to("cuda:{}".format(rank))
+        features = F.normalize(backbone(img))
+        features.retain_grad()
+        if partial == 0:
+            #x_grad, loss_v = fc.forward_backward(label, features, opt_pfc)
+            
+            feature_path = "p0_fea_{}.pt".format(data_idx)
+            torch.save(features.cpu(), feature_path)
+            logits = fc(features, label)
+            logits_path = "p0_logits_{}.pt".format(data_idx)
+            torch.save(logits.cpu(), logits_path) 
+            loss_v = loss_fn(logits, label)
+        elif partial == 1:
+            loss_v, loss_g = fc(features, label)
+
+            feature_path = "p1_fea_{}_{}.pt".format(data_idx, rank)
+            torch.save(features.cpu(), feature_path)
+        elif partial == 2:
+            x_grad, loss_v = fc.forward_backward(label, features, opt_pfc)
+
+        print("rank: {}, loss shape: {}, loss: {}".format(rank, loss_v.shape, loss_v))
+        if fp16:
+            if partial == 2:
+                features.backward(grad_amp.scale(x_grad))
+                #scaler.scale(loss_v).backward()
+            else:
+                grad_amp.scale(loss_v).backward()
+            grad_amp.unscale_(opt_backbone)
+            torch.nn.utils.clip_grad_norm_(backbone.parameters(), max_norm=5, norm_type=2, error_if_nonfinite=True)
+            grad_amp.step(opt_backbone)
+            grad_amp.update()
+        else:
+            if partial == 2:
+                features.backward(x_grad)
+            else:
+                loss_v.backward()
+            torch.nn.utils.clip_grad_norm_(backbone.parameters(), max_norm=5, norm_type=2)
+            opt_backbone.step()
+
+        #print("fea grad:", features.grad)
+        '''
+        fc_grad = fc.weight.grad.clone().detach()
+        if partial:
+            dist.all_reduce(fc_grad, dist.ReduceOp.SUM)
+            dist.all_reduce(loss_v, dist.ReduceOp.SUM)
+        '''
+        #    print("gather loss: ", loss_v)
+            #fc_grad = fc_grad / world_size
+        #print("fc grad:", fc_grad[3:6, :5])
+        #if rank == 1:
+        #    print("fc grad:", fc_grad[:, :5])
+        
+        opt_pfc.step()
+        opt_backbone.zero_grad()
+        opt_pfc.zero_grad()
+
+        #print("fc grad:", fc.weight.grad)
+        max_display = 0
+        display_iter = 0
+        if partial == 0:
+            for p in fc.module.parameters():
+                torch.save(p.cpu(), "local_fc_{}.pt".format(data_idx))
+                #print(p[:, :5])
+
+            for p in backbone.module.parameters():
+                if display_iter > max_display:
+                    break
+                torch.save(p.cpu(), "local_backbone_{}.pt".format(data_idx))
+                #print("backbone p value: {} ".format(p[0, :2, :, :]))
+                display_iter += 1
+        elif partial == 1:
+            for p in fc.parameters():
+                torch.save(p.cpu(), "softmax_fc_{}_{}.pt".format(data_idx, rank))
+                pass
+                #print(p[:, :5])
+
+            for p in backbone.module.parameters():
+                if display_iter > max_display:
+                    break
+                if rank == 0:
+                    torch.save(p.cpu(), "softmax_backbone_{}.pt".format(data_idx))
+                #print("backbone p value: {} ".format(p[0, :2, :, :]))
+                display_iter += 1
+
+
+
+def build_dataset(rng, batch_size, num_classes, num_samples, input_shape):
+    input_feat = rng.normal(size=(num_samples, input_shape[0], input_shape[1],input_shape[2]))
+    input_feat = torch.tensor(input_feat, dtype=torch.float32)
+    labels = rng.randint(low=0, high=num_classes, size=(num_samples, ))
+    print("labels: ", labels)
     labels = torch.tensor(labels, dtype=torch.long)
     dataset = TensorDataset(input_feat, labels)
     sampler = DistributedSampler(dataset, shuffle=False)
 
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, drop_last=True)
     return dataloader
 
 
-def build_model(local_rank, world_size, num_classes, batch_size, margin_softmax, embedding_size=512, fp16=True):
+def build_model(local_rank, world_size, num_classes, batch_size, margin_softmax, embedding_size=512, fp16=True, partial=False):
 
-    backbone = iresnet.iresnet100(dropout=0.0, fp16=fp16, num_features=embedding_size)
-    backbone.to(self.device)
+    backbone = iresnet.iresnet18(dropout=0.0, fp16=fp16, num_features=embedding_size)
+    backbone = backbone.cuda(local_rank)
     backbone = torch.nn.parallel.DistributedDataParallel(
-        module=self.backbone, broadcast_buffers=False, device_ids=[self.local_rank])
+        module=backbone, broadcast_buffers=False, device_ids=[local_rank])
     backbone.train()
 
-    fc = DistSoftmax(
-        rank=local_rank, local_rank=local_rank, world_size=world_size, 
-        batch_size=self.batch_size, margin_softmax=margin_softmax, num_classes=num_classes,
-        embedding_size=self.emb_size)
+    if partial == 0: 
+        fc = localCircleLoss(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
+        fc = fc.cuda(local_rank)
+        fc = torch.nn.parallel.DistributedDataParallel(
+            module=fc, broadcast_buffers=False, device_ids=[local_rank])
+
+    elif partial == 1:
+
+        fc = DistSoftmax(
+            rank=local_rank, local_rank=local_rank, world_size=world_size, 
+            batch_size=batch_size, resume=False, margin_softmax=margin_softmax, num_classes=num_classes,
+            embedding_size=embedding_size)
+    elif partial == 2:
+        fc = PartialFC(rank=local_rank, local_rank=local_rank, world_size=world_size, 
+            batch_size=batch_size, resume=False, margin_softmax=margin_softmax, num_classes=num_classes,
+            embedding_size=embedding_size)
+    else:
+        raise AssertionError("error partial type: {}".format(partial))
+
+    #fc.cuda(local_rank)
     return backbone, fc
 
 def main(args):
+    torch.manual_seed(1234)
     size = args.gpu_num
+    partial = args.partial
+    if partial == 0:
+        size = 1
+
     processes = []
+    #torch.use_deterministic_algorithms(True)
     for rank in range(size):
         p = mp.Process(target=init_process, args=(rank, size, args, run_test))
         p.start()
@@ -75,8 +215,9 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="test loss")
     parser.add_argument("--gpu_num", type=int, default=2, help="")
-    parser.add_argument("--batch_size", type=int, default=128, help="")
+    parser.add_argument("--batch_size", type=int, default=4, help="")
     parser.add_argument("--loss_type", type=str, default="arcface", help="")
+    parser.add_argument("--partial", type=int, default=0, help="")
     args = parser.parse_args()
     main(args)
 

@@ -7,23 +7,36 @@ import torch
 import torch.distributed as dist
 
 import torch.multiprocessing as mp
+import numpy as np
+
+import cv2
 
 def run(args, rank, size):
     print("rank: {}, size: {}".format(rank, size))
-    data_prefix = args.data_prefix
-    dataloader = build_dataloader(data_prefix, rank, batch_size=1)
+    rec_path = args.rec_path
+    idx_path = args.idx_path
+    dataloader = build_dataloader(rec_path, idx_path, rank, batch_size=4)
     print(len(dataloader))
     sample_idx = 0
-    total_sample_num = 10
+    total_sample_num = 2
+    img_idx = 0
     for data in dataloader:
         if sample_idx > total_sample_num:
             break
-        print(data[0].shape)
+        imgs, labels = data
+        imgs = imgs.cpu().numpy()
+        for img in imgs:
+            img = np.transpose(img, (1, 2, 0))
+            img = (img / 0.078125) + 128.
+            img = img.astype(np.uint8)
+            cv2.imwrite("{}_{}.jpg".format(img_idx, rank), img)
+            img_idx += 1
+
         sample_idx += 1
 
 
-def build_dataloader(data_prefix, local_rank, batch_size):
-    train_set = MXFaceDataset(data_prefix=data_prefix, local_rank=local_rank)
+def build_dataloader(rec_path, idx_path, local_rank, batch_size):
+    train_set = MXFaceDataset(rec_path, idx_path, local_rank=local_rank)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=False)
     train_loader = DataLoaderX(
@@ -56,7 +69,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--data_prefix", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2", help="")
+    parser.add_argument("--rec_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.rec", help="")
+    parser.add_argument("--idx_path", type=str, default="/home/users/han.tang/data/baseline_2030_V0.2/baseline_2030_V0.2.idx", help="")
     #parser.add_argument("--local_rank", type=int, default=0, help="")
     #parser.add_argument("--world_size", type=int, default=1, help="")
     args= parser.parse_args()

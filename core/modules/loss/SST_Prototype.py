@@ -99,8 +99,6 @@ class SST_Prototype(Module):
 
         output1 = self.compute_theta(p1, self.exchange_fea_g2, label, batch_size)
         output2 = self.compute_theta(p2, self.exchange_fea_g1, label, batch_size)
-        output1 = torch.mm(p1, self.queue)
-        output2 = torch.mm(p2, self.queue)
         output1 *= self.scale
         output2 *= self.scale
 

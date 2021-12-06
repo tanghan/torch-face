@@ -9,6 +9,8 @@ import torch
 import torch.nn.functional as F
 from torch.nn import Module, Parameter
 
+eps = 1e-10
+
 class ArcFace(Module):
     """Implementation for "ArcFace: Additive Angular Margin Loss for Deep Face Recognition"
     """
@@ -25,7 +27,7 @@ class ArcFace(Module):
 
     def forward(self, cos_theta: torch.Tensor, labels):
         cos_theta = cos_theta.clamp(-1, 1)
-        sin_theta = torch.sqrt(1.0 - torch.pow(cos_theta, 2))
+        sin_theta = torch.sqrt(1.0 - torch.pow(cos_theta, 2) + eps)
         cos_theta_m = cos_theta * self.cos_margin - sin_theta * self.sin_margin
         # 0 <= theta + m <= pi, ==> -m <= theta <= pi-m
         # because 0<=theta<=pi, so, we just have to keep theta <= pi-m, that is cos_theta >= cos(pi-m)

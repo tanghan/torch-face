@@ -26,6 +26,8 @@ class CircleLoss(Module):
 
     def forward(self, cos_theta: torch.Tensor, labels):
         cos_theta = cos_theta.clamp(-1, 1)
+        save_path = "dist_circle_theta_{}.pt".format(self.local_rank)
+        torch.save(cos_theta.cpu(), save_path)
         valid_label_index = torch.where(labels != -1)[0]
 
         index_pos = torch.zeros_like(cos_theta)

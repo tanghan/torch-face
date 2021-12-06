@@ -18,21 +18,25 @@ class Matmul_(Function):
     @staticmethod
     def forward(ctx, features, w, total_features):
         dist.all_reduce(total_features, dist.ReduceOp.SUM)
-        outputs = F.linear(total_features, w)
+        dist.barrier()
+        outputs = linear(total_features, w)
+
         ctx.save_for_backward(total_features, w)
         return outputs
 
     @staticmethod
     def backward(ctx, grad_output):
+
         rank = dist.get_rank()
+
         world_size = dist.get_world_size()
         total_features, w = ctx.saved_tensors
         batch_size = total_features.size()[0] // world_size
         grad_logits = torch.mm(grad_output, w)
         dist.all_reduce(grad_logits, dist.ReduceOp.SUM)
+        dist.barrier()
 
-        grad_w = torch.mm(torch.t(total_features), grad_output)
-        grad_logits.mul_(world_size)
+        grad_w = torch.mm(torch.t(total_features), grad_output)# / world_size
 
         return grad_logits[rank * batch_size:(rank + 1) * batch_size, ], torch.t(grad_w), None
 
@@ -42,9 +46,11 @@ class SoftmaxFunc_(Function):
     def forward(ctx, logits: torch.Tensor, total_labels: torch.Tensor):
         max_fc = torch.max(logits, dim=1, keepdim=True)[0]
         dist.all_reduce(max_fc, dist.ReduceOp.MAX)
+        dist.barrier()
         logits_exp = torch.exp(logits - max_fc)
         logits_sum_exp = logits_exp.sum(dim=1, keepdims=True)
         dist.all_reduce(logits_sum_exp, dist.ReduceOp.SUM)
+        dist.barrier()
 
         logits_exp.div_(logits_sum_exp)
         grad = logits_exp * 1.
@@ -61,12 +67,14 @@ class SoftmaxFunc_(Function):
     @staticmethod
     def backward(ctx, grad_output):
         grad, total_labels = ctx.saved_tensors
+        rank = dist.get_rank()
 
         index = torch.where(total_labels != -1)[0]
         one_hot = torch.zeros(size=[index.size()[0], grad.size()[1]], device=grad.device)
         one_hot.scatter_(1, total_labels[index, None], 1)
         grad[index] -= one_hot
         grad.div_(total_labels.size()[0])
+
         return grad * grad_output, None
 
 
@@ -78,9 +86,8 @@ class DistSoftmax(Module):
     https://arxiv.org/abs/2010.05222
     """
 
-    @torch.no_grad()
     def __init__(self, rank, local_rank, world_size, batch_size, resume,
-                 margin_softmax, num_classes, embedding_size=512, prefix="./"):
+                 margin_softmax, num_classes, embedding_size=512, prefix="./", seed=1234):
         """
         rank: int
             Unique process(GPU) ID from 0 to world_size - 1.
@@ -104,14 +111,19 @@ class DistSoftmax(Module):
         """
         super(DistSoftmax, self).__init__()
         #
-        self.num_classes: int = num_classes
         self.rank: int = rank
         self.local_rank: int = local_rank
-        self.device: torch.device = torch.device("cuda:{}".format(self.local_rank))
         self.world_size: int = world_size
         self.batch_size: int = batch_size
-        self.margin_softmax: callable = margin_softmax
+        self.num_classes: int = num_classes
         self.embedding_size: int = embedding_size
+
+        self.device: torch.device = torch.device(self.local_rank)
+        self.generator = None
+        if resume is not True:
+            generator = torch.Generator(device=self.device)
+            self.generator = generator.manual_seed(seed + rank)
+        self.margin_softmax: callable = margin_softmax
         self.prefix: str = prefix
         self.num_local: int = num_classes // world_size + int(rank < num_classes % world_size)
         self.class_start: int = num_classes // world_size * rank + min(rank, num_classes % world_size)
@@ -123,19 +135,24 @@ class DistSoftmax(Module):
         if resume:
             try:
                 logging.info("softmax weight resume from {}".format(self.weight_name))
-                self.weight: torch.Tensor = torch.load(self.weight_name).cuda(local_rank)
+                weight: torch.Tensor = torch.load(self.weight_name).cuda(local_rank)
 
-                if self.weight.shape[0] != self.num_local or self.weight_mom.shape[0] != self.num_local:
-                    logging.info("shape not equal, {} != {} or {} != {}".format(self.weight.shape[0], self.num_local, self.weight_mom.shape[0], self.num_local))
+                if weight.shape[0] != self.num_local:
+                    logging.info("shape not equal, {} != {} or {} != {}".format(weight.shape[0], self.num_local, self.num_local))
                     raise IndexError
                 logging.info("softmax weight resume successfully!")
             except (FileNotFoundError, KeyError, IndexError):
-                self.weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device)
+                weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device, generator=self.generator)
                 logging.info("softmax weight init!")
         else:
-            self.weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device)
+            weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device, generator=self.generator)
+            #weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device)
             logging.info("softmax weight init successfully!")
+        save_path = "dist_softmax_init_{}_w.pt".format(rank)
+        torch.save(weight.cpu(), save_path)
+        self.weight = torch.nn.Parameter(weight)
         self.stream: torch.cuda.Stream = torch.cuda.Stream(local_rank)
+        self.iter = 0
 
     def save_params(self):
         """ Save softmax weight for each rank on prefix
@@ -159,12 +176,13 @@ class DistSoftmax(Module):
         """ Partial fc forward, `logits = X * sample(W)`
         """
         total_label, norm_weight = self.prepare(label)
-        self.total_features.zero_()
-        self.total_features[self.local_rank * self.batch_size:(self.local_rank + 1) * self.batch_size, ] = features.detach()
+        with torch.no_grad():
+            self.total_features.zero_()
+            self.total_features[self.local_rank * self.batch_size:(self.local_rank + 1) * self.batch_size, ] = features.clone().detach()
 
         torch.cuda.current_stream().wait_stream(self.stream)
+        dist.barrier()
 
-        total_label, norm_weight = self.prepare(label)
         logits = Matmul_.apply(features, norm_weight, self.total_features)
 
         loss_g = None
@@ -173,7 +191,12 @@ class DistSoftmax(Module):
         else:
             logits = self.margin_softmax(logits, total_label)
 
+        save_path = "dist_softmax_theta_{}_{}.pt".format(self.iter, self.rank)
+
+        torch.save(logits.cpu(), save_path)
         loss = SoftmaxFunc_.apply(logits, total_label)
+
+        self.iter += 1
 
         return loss, loss_g
 
@@ -190,6 +213,7 @@ class DistSoftmax(Module):
             total_label = torch.zeros(
                 size=[self.batch_size * self.world_size], device=self.device, dtype=torch.long)
             dist.all_gather(list(total_label.chunk(self.world_size, dim=0)), label)
+            dist.barrier()
             self.sample(total_label)
             norm_weight = normalize(self.weight)
             return total_label, norm_weight

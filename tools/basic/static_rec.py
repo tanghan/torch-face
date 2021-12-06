@@ -94,21 +94,24 @@ def static_baseline_dataset(rec_path, idx_path):
         id_num[identity] = id_end - id_start
         imgidx += list(range(*id2range[identity]))
 
-    last_idx = imgidx[-1]
-    s = imgrec.read_idx(last_idx)
-    header, _ = mx.recordio.unpack(s)
-    print("last idx: {}".format(last_idx))
-    print(header.label)
-    print("id len: {}".format(len(id_seq)))
-    #print(len(imgidx))
+    for i in range(23, 29):
+    
+        s = imgrec.read_idx(i)
+        header, img = unpack_fp64(s)
+        img = mx.image.imdecode(img)
+        print(img.shape)
+        img = img.asnumpy()
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        cv2.imwrite("cvt_{}.jpg".format(i), img)
+
 
 
 def main():
     #static_pulic_dataset(abtdge_id1w[0], abtdge_id1w[1])
-    #static_baseline_dataset(abtdge_id1w[0], abtdge_id1w[1])
+    static_baseline_dataset(abtdge_id1w[0], abtdge_id1w[1])
     #static_pulic_dataset(ValID[0], ValID[1])
     #static_pulic_dataset(megaface[0], megaface[1])
-    static_pulic_dataset(dms_car[0], dms_car[1])
+    #static_pulic_dataset(dms_car[0], dms_car[1])
     #static_pulic_dataset(j2[0], j2[1])
 
 

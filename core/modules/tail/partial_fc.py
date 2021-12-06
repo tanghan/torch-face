@@ -19,7 +19,7 @@ class PartialFC(Module):
 
     @torch.no_grad()
     def __init__(self, rank, local_rank, world_size, batch_size, resume,
-                 margin_softmax, num_classes, sample_rate=1.0, embedding_size=512, prefix="./"):
+                 margin_softmax, num_classes, sample_rate=1.0, embedding_size=512, prefix="./", seed=1234):
         """
         rank: int
             Unique process(GPU) ID from 0 to world_size - 1.
@@ -62,6 +62,7 @@ class PartialFC(Module):
 
         self.weight_name = os.path.join(self.prefix, "rank_{}_softmax_weight.pt".format(self.rank))
         self.weight_mom_name = os.path.join(self.prefix, "rank_{}_softmax_weight_mom.pt".format(self.rank))
+        self.generator = None
 
         if resume:
             try:
@@ -80,7 +81,11 @@ class PartialFC(Module):
                 logging.info("softmax weight init!")
                 logging.info("softmax weight mom init!")
         else:
-            self.weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device)
+            generator = torch.Generator(device=self.device)
+            self.generator = generator.manual_seed(seed + rank)
+
+            #self.weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device)
+            self.weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device, generator=self.generator)
             self.weight_mom: torch.Tensor = torch.zeros_like(self.weight)
             logging.info("softmax weight init successfully!")
             logging.info("softmax weight mom init successfully!")

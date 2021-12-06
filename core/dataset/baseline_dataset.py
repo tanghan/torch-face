@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from utils.mx_rec_utils.parse_rec_utils import unpack_fp64
 from core.dataset.transforms.base_transform import NormalizeTransformer, ToTensor, MirrorTransformer
+from core.dataset.transforms.gray_transform import To3CGray
 
 
 class BackgroundGenerator(threading.Thread):
@@ -71,9 +72,10 @@ class DataLoaderX(DataLoader):
 
 
 class MXFaceDataset(Dataset):
-    def __init__(self, rec_path, idx_path, local_rank, origin_preprocess=False, training=True):
+    def __init__(self, rec_path, idx_path, local_rank, origin_preprocess=False, training=True, seed=1234):
         super(MXFaceDataset, self).__init__()
         self.training = training
+        self.rng = np.random.RandomState(seed + local_rank)
 
         base_transforms = [] 
         if origin_preprocess:
@@ -86,6 +88,7 @@ class MXFaceDataset(Dataset):
         else:
             if training:
                 base_transforms.append(MirrorTransformer())
+            base_transforms.append(To3CGray(0.08, self.rng))
             base_transforms.append(NormalizeTransformer(bias=128., scale=0.078125))
             base_transforms.append(ToTensor())
 
