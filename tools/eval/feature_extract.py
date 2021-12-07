@@ -40,8 +40,8 @@ dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint3
                     "/cluster_home//data/train_data/id_card/njn/small_njn.idx"],
         "Val_J2_RealCar": ["/home/users/han.tang/data/test/val/Val_J2_RealCar/Val_J2_RealCar.rec",
                     "/home/users/han.tang/data/test/val/Val_J2_RealCar/Val_J2_RealCar.idx"],
-        "Val_DMS_Car": ["/home/users/han.tang/data/test/val/Val_DMS_Car/DMS_Car.rec",
-                    "/home/users/han.tang/data/test/val/Val_DMS_Car/DMS_Car.idx"],
+        "Val_DMS_Car": ["/home/users/han.tang/data/test/val/Val_DMS_Car/DMS_Car_cleaned.rec",
+                    "/home/users/han.tang/data/test/val/Val_DMS_Car/DMS_Car_cleaned.idx"],
         "abtdge_id1w": ["/cluster_home/data/train_data/abtdge_id1w/abtdge_id1w_Above9_miabove10_20200212.rec",
                     "/cluster_home/data/train_data/abtdge_id1w/abtdge_id1w_Above9_miabove10_20200212.idx"],
         }

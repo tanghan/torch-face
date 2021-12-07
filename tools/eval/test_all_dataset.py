@@ -14,12 +14,12 @@ val30w_gallery_info = TestInfo(dataset_name="Val30W_gallery", dataset_type="rec"
 dms_info = TestInfo(dataset_name="Val_DMS_Car", dataset_type="rec", total_num=4677, output_dir="/home/users/han.tang/data/eval/features/Val_DMS_Car/cache_feature/subcenter")
 
 test_list = []
-#test_list.append(ijbc_info)
-#test_list.append(j2_info)
-#test_list.append(life_info)
-#test_list.append(id_info)
-#test_list.append(val30w_query_info)
-#test_list.append(val30w_gallery_info)
+test_list.append(ijbc_info)
+test_list.append(j2_info)
+test_list.append(life_info)
+test_list.append(id_info)
+test_list.append(val30w_query_info)
+test_list.append(val30w_gallery_info)
 test_list.append(dms_info)
 
 

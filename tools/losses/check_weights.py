@@ -39,8 +39,10 @@ def compare_fea(rank=-1, data_idx=0):
         dist_fea_list.append(torch.load(fea_path))
     dist_features = torch.cat(dist_fea_list, 1)
     dist_features = dist_features.reshape((num_samples, emb_size))
-    #diff = torch.sum(torch.abs(features - dist_features[reorder_list]))
-    diff = torch.sum(torch.abs(features - dist_features))
+    diff = torch.sum(torch.abs(features - dist_features[reorder_list]))
+    print(features[:5, :5])
+    print(dist_features[reorder_list][:5, :5])
+    #diff = torch.sum(torch.abs(features - dist_features))
 
     print("compare fea: --- \ndata idx: {} diff: {}\n------".format(data_idx, diff))
     return features
@@ -114,9 +116,10 @@ def compare_logits(rank=-1, data_idx=0):
         fea_path = "dist_logits_{}_{}.pt".format(data_idx, rank_i)
         dist_list.append(torch.load(fea_path))
     dist_features = torch.cat(dist_list, 1)
-    #print(features[:5, :5])
+    print(features[5:10, :10])
+    print(dist_features[reorder_list][5:10, :10] / 2)
     #dist_features = dist_features.reshape((num_samples, emb_size))
-    diff = torch.sum(torch.abs(features - dist_features[reorder_list]))
+    diff = torch.sum(torch.abs(features - (dist_features[reorder_list])))
 
     print("compare logits ----- \ndata idx: {} diff: {}".format(data_idx, diff))
     return features
@@ -154,7 +157,7 @@ def main():
     #fc_w = compare_init_fc_weights(rank=4)
     fea = compare_fea(rank=4, data_idx=0)
     compare_fea_grad(rank=4, data_idx=0)
-    logits = compare_logits(rank=4, data_idx=0)
+    #logits = compare_logits(rank=4, data_idx=0)
     compare_opt_weights(rank=4, data_idx=0)
     compare_opt_backbone(rank=4, data_idx=0)
     #theta = compare_theta(rank=4, data_idx=0)

@@ -48,8 +48,8 @@ def run_test(args, rank, world_size, fp16=False):
     print("start with partial {}".format(partial))
 
     dataloaer = build_dataset(rng, batch_size, num_classes, num_samples, input_shape)
-    #head_factory = HeadFactory(rank, world_size, "MagFace", "./config/head_conf.yaml")
-    head_factory = HeadFactory(rank, world_size, "CircleLoss", "./config/head_conf.yaml")
+    head_factory = HeadFactory(rank, world_size, "MagFace", "./config/head_conf.yaml")
+    #head_factory = HeadFactory(rank, world_size, "CircleLoss", "./config/head_conf.yaml")
     margin_softmax = head_factory.get_head()
     #margin_softmax = CircleLoss(rank, world_size)
     backbone, fc = build_model(rank, world_size, num_classes, batch_size, margin_softmax, fp16=fp16, partial=partial)
@@ -78,10 +78,10 @@ def run_test(args, rank, world_size, fp16=False):
             
             feature_path = "p0_fea_{}.pt".format(data_idx)
             torch.save(features.cpu(), feature_path)
-            logits = fc(features, label)
-            #logits, loss_g = fc(features, label)
+            #logits = fc(features, label)
+            logits, loss_g = fc(features, label)
             loss_v = loss_fn(logits, label)
-            #loss_v = loss_v + torch.mean(loss_g)
+            loss_v = loss_v + torch.mean(loss_g)
 
             logits_path = "p0_logits_{}.pt".format(data_idx)
             torch.save(logits.cpu(), logits_path) 
@@ -194,9 +194,9 @@ def build_model(local_rank, world_size, num_classes, batch_size, margin_softmax,
     backbone.train()
 
     if partial == 0: 
-        #fc = localMagFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
+        fc = localMagFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes, scale=64, margin_am=0.0, l_a=10, u_a=110, l_margin=0.45, u_margin=0.8, lamda=20)
         #fc = localArcFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
-        fc = localCircleLoss(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
+        #fc = localCircleLoss(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
         fc = fc.cuda(local_rank)
         fc = torch.nn.parallel.DistributedDataParallel(
             module=fc, broadcast_buffers=False, device_ids=[local_rank])

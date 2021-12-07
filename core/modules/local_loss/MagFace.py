@@ -47,6 +47,7 @@ class MagFace(Module):
         ada_margin = self.calc_margin(x_norm)
         cos_m, sin_m = torch.cos(ada_margin), torch.sin(ada_margin)
         loss_g = 1/(self.u_a**2) * x_norm + 1/(x_norm)
+
         kernel_norm = F.normalize(self.weight)
         feats = F.normalize(feats)
         cos_theta = F.linear(feats, kernel_norm) 

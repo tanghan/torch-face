@@ -176,17 +176,20 @@ class Trainer():
 
             features = self.backbone(img)
 
-            features = F.normalize(features)
             loss_v, loss_g = self.module_fc(features, label)
+            if loss_g is not None:
+                loss_v += loss_v + torch.mean(loss_g) / self.world_size
 
             if self.fp16:
                 grad_amp.scale(loss_v).backward()
+                dist.barrier()
                 grad_amp.unscale_(self.opt_backbone)
                 torch.nn.utils.clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
                 grad_amp.step(self.opt_backbone)
                 grad_amp.update()
             else:
                 loss_v.backward()
+                dist.barrier()
                 torch.nn.utils.clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
                 self.opt_backbone.step()
 
