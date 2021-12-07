@@ -11,6 +11,12 @@ from torchvision import transforms
 from utils.mx_rec_utils.parse_rec_utils import unpack_fp64
 from core.dataset.transforms.base_transform import NormalizeTransformer, ToTensor, MirrorTransformer
 from core.dataset.transforms.gray_transform import To3CGray
+from core.dataset.transforms.spatial_variant_brightness_transform import SpatialVariantBrightness
+from core.dataset.transforms.random_occlusion_transform import RandomOcclusion
+from core.dataset.transforms.jpeg_compress_transform import JPEGCompress
+from core.dataset.transforms.lmks_jitter_transform import LmksJitter
+from core.dataset.transforms.random_downsample_transform import RandomDownSample
+from core.dataset.transforms.motion_blur_transform import GaussianBlur, MotionBlur
 
 
 class BackgroundGenerator(threading.Thread):
@@ -88,7 +94,13 @@ class MXFaceDataset(Dataset):
         else:
             if training:
                 base_transforms.append(MirrorTransformer())
-            base_transforms.append(To3CGray(0.08, self.rng))
+                base_transforms.append(To3CGray(0.08, self.rng))
+                base_transforms.append(SpatialVariantBrightness(p=0.3, rng=self.rng, brightness=0.5))
+                base_transforms.append(RandomOcclusion(p=0.12, rng=self.rng, rand_occlusion_type=1))
+                base_transforms.append(JPEGCompress(p=0.3, rng=self.rng, max_quality=90, min_quality=35))
+                base_transforms.append(RandomDownSample(p=0.05, rng=self.rng, min_downsample_width=60, inter_method=1, data_shape=(3, 112, 112)))
+                base_transforms.append(GaussianBlur(p=0.15, rng=self.rng, kernel_size_max=9, kernel_size_min=2, sigma_min=0, sigma_max=0))
+                base_transforms.append(MotionBlur(p=0.05, rng=self.rng, length_min=9, length_max=18, angle_min=1, angle_max=359))
             base_transforms.append(NormalizeTransformer(bias=128., scale=0.078125))
             base_transforms.append(ToTensor())
 

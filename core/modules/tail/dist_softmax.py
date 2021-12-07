@@ -12,6 +12,76 @@ from core.modules.loss.MagFace import MagFace
 
 from torch.autograd import Function
 
+class GatherFeature2_(Function):
+
+    @staticmethod
+    def forward(ctx, features):
+
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        batch_size, embedding_size = features.size()
+        total_features = torch.zeros(
+            size=[batch_size * world_size, embedding_size], device=features.device)
+        dist.all_gather(list(total_features.chunk(world_size, dim=0)), features.data)
+
+        #total_features.zero_()
+        #total_features[rank * batch_size:(rank + 1) * batch_size, ] = features.clone().detach()
+        dist.barrier()
+        print("total features shape: {}, batch_size: {}".format(total_features.size(), batch_size))
+
+        return total_features
+
+    @staticmethod
+    def backward(ctx, grad_output):
+
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        batch_size = grad_output.size()[0] // world_size
+        #if rank == 0:
+        #    print(grad_output)
+        #grad_output.mul_(world_size)
+        #grad_output.div_(world_size)
+        print("grad output shape: {}, batch_size: {}, rank: {}".format(grad_output.size(), batch_size, rank))
+        #if rank == 0:
+        #    print(grad_output)
+        if rank == 0:
+            print("grad output: {}".format(grad_output[rank * batch_size:(rank + 1) * batch_size, :10]))
+
+        return grad_output[rank * batch_size:(rank + 1) * batch_size, :]
+
+class GatherFeature1_(Function):
+
+    @staticmethod
+    def forward(ctx, features, total_features):
+
+        rank = dist.get_rank()
+        batch_size = features.size()[0]
+        #total_features.zero_()
+        #total_features[rank * batch_size:(rank + 1) * batch_size, ] = features.clone().detach()
+        dist.all_reduce(total_features, dist.ReduceOp.SUM)
+        dist.barrier()
+        print("total features shape: {}, batch_size: {}".format(total_features.size(), batch_size))
+
+        return total_features
+
+    @staticmethod
+    def backward(ctx, grad_output):
+
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        batch_size = grad_output.size()[0] // world_size
+        #if rank == 0:
+        #    print(grad_output)
+        #grad_output.mul_(world_size)
+        #grad_output.div_(world_size)
+        print("grad output shape: {}, batch_size: {}, rank: {}".format(grad_output.size(), batch_size, rank))
+        #if rank == 0:
+        #    print(grad_output)
+        if rank == 0:
+            print("grad output: {}".format(grad_output[rank * batch_size:(rank + 1) * batch_size, :10]))
+
+        return grad_output[rank * batch_size:(rank + 1) * batch_size, :], None
+
 
 class Matmul_(Function):
 
@@ -28,17 +98,84 @@ class Matmul_(Function):
     def backward(ctx, grad_output):
 
         rank = dist.get_rank()
-
         world_size = dist.get_world_size()
+
         total_features, w = ctx.saved_tensors
         batch_size = total_features.size()[0] // world_size
         grad_logits = torch.mm(grad_output, w)
         dist.all_reduce(grad_logits, dist.ReduceOp.SUM)
         dist.barrier()
 
-        grad_w = torch.mm(torch.t(total_features), grad_output)# / world_size
+        grad_w = torch.mm(torch.t(total_features), grad_output)
+        if rank == 0:
+            print("mat mul grad: {}".format(grad_logits[rank * batch_size:(rank + 1) * batch_size, :10] * world_size))
 
-        return grad_logits[rank * batch_size:(rank + 1) * batch_size, ], torch.t(grad_w), None
+        return grad_logits[rank * batch_size:(rank + 1) * batch_size, ] * world_size, torch.t(grad_w), None
+
+class Matmul2_(Function):
+
+    @staticmethod
+    def forward(ctx, features, w):
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        batch_size, embedding_size = features.size()
+        total_features = torch.zeros(
+            size=[batch_size * world_size, embedding_size], device=features.device)
+        dist.all_gather(list(total_features.chunk(world_size, dim=0)), features.data)
+
+        #total_features.zero_()
+        #total_features[rank * batch_size:(rank + 1) * batch_size, ] = features.clone().detach()
+        dist.barrier()
+
+        dist.barrier()
+        outputs = linear(total_features, w)
+
+        ctx.save_for_backward(total_features, w)
+        return outputs
+
+    @staticmethod
+    def backward(ctx, grad_output):
+
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+
+        total_features, w = ctx.saved_tensors
+        batch_size = total_features.size()[0] // world_size
+        grad_logits = torch.mm(grad_output, w)
+        dist.all_reduce(grad_logits, dist.ReduceOp.SUM)
+        dist.barrier()
+
+        grad_w = torch.mm(torch.t(total_features), grad_output)
+        if rank == 0:
+            print("mat mul grad: {}".format(grad_logits[rank * batch_size:(rank + 1) * batch_size, :10] * world_size))
+
+        return grad_logits[rank * batch_size:(rank + 1) * batch_size, ] * world_size, torch.t(grad_w)
+
+class Matmul3_(Function):
+
+    @staticmethod
+    def forward(ctx, features, w):
+
+        outputs = linear(features, w)
+        ctx.save_for_backward(features, w)
+        return outputs
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+
+        total_features, w = ctx.saved_tensors
+        batch_size = total_features.size()[0] // world_size
+        grad_logits = torch.mm(grad_output, w)
+        dist.all_reduce(grad_logits, dist.ReduceOp.SUM)
+        dist.barrier()
+
+        grad_w = torch.mm(torch.t(total_features), grad_output)
+
+        return grad_logits * world_size, torch.t(grad_w)
+
+
 
 class SoftmaxFunc_(Function):
 
@@ -148,8 +285,8 @@ class DistSoftmax(Module):
             weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device, generator=self.generator)
             #weight = torch.normal(0, 0.01, (self.num_local, self.embedding_size), device=self.device)
             logging.info("softmax weight init successfully!")
-        save_path = "dist_softmax_init_{}_w.pt".format(rank)
-        torch.save(weight.cpu(), save_path)
+        #save_path = "dist_softmax_init_{}_w.pt".format(rank)
+        #torch.save(weight.cpu(), save_path)
         self.weight = torch.nn.Parameter(weight)
         self.stream: torch.cuda.Stream = torch.cuda.Stream(local_rank)
         self.iter = 0
@@ -176,22 +313,29 @@ class DistSoftmax(Module):
         """ Partial fc forward, `logits = X * sample(W)`
         """
         total_label, norm_weight = self.prepare(label)
+
         with torch.no_grad():
             self.total_features.zero_()
-            self.total_features[self.local_rank * self.batch_size:(self.local_rank + 1) * self.batch_size, ] = features.clone().detach()
+            self.total_features[self.rank * self.batch_size:(self.rank + 1) * self.batch_size, ] = features.clone().detach()
 
         torch.cuda.current_stream().wait_stream(self.stream)
         dist.barrier()
 
-        logits = Matmul_.apply(features, norm_weight, self.total_features)
+        gathered_features = GatherFeature1_.apply(features, self.total_features)
+        norm_feat = F.normalize(gathered_features)
+        #logits = F.linear(gathered_features, norm_weight)
+        #logits = Matmul_.apply(features, norm_weight, self.total_features)
+        #logits = Matmul2_.apply(features, norm_weight)
+        #gathered_features = GatherFeature2_.apply(features)
+        logits = Matmul3_.apply(norm_feat, norm_weight)
 
         loss_g = None
         if isinstance(self.margin_softmax, MagFace):
-            logits, loss_g = self.margin_softmax(logits, self.total_features, total_label)
+            logits, loss_g = self.margin_softmax(logits, gathered_features, total_label)
         else:
             logits = self.margin_softmax(logits, total_label)
 
-        save_path = "dist_softmax_theta_{}_{}.pt".format(self.iter, self.rank)
+        save_path = "dist_logits_{}_{}.pt".format(self.iter, self.rank)
 
         torch.save(logits.cpu(), save_path)
         loss = SoftmaxFunc_.apply(logits, total_label)

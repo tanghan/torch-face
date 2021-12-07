@@ -70,11 +70,11 @@ def run_train(args, device_id, rank, world_size):
     print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}".format(num_samples,
         num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume))
 
-    trainer = Trainer(rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, probe_weights_path=probe_weights_path, gallery_weights_path=gallery_weights_path, 
+    trainer = Trainer(device_id, rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, probe_weights_path=probe_weights_path, gallery_weights_path=gallery_weights_path, 
             backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type)
     callback_logging = CallBackLogging(50, rank, total_step, batch_size, world_size, None)
-    callback_checkpoint_probe = CallBackModelCheckpoint(rank, output_dir)
-    callback_checkpoint_gallery = CallBackModelCheckpoint(rank, output_dir)
+    callback_checkpoint_probe = CallBackModelCheckpoint(device_id, output_dir)
+    callback_checkpoint_gallery = CallBackModelCheckpoint(device_id, output_dir)
 
     global_step = 0 
     fp16=True
@@ -102,7 +102,7 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 
 class Trainer():
 
-    def __init__(self, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=512, num_epoch=12, 
+    def __init__(self, device_id, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=512, num_epoch=12, 
             sample_rate=0.1, resume=True, probe_weights_path="./", gallery_weights_path=None, backbone_lr_ratio=1., loss_type="cosface"):
         self.local_rank = local_rank
         self.world_size = world_size
@@ -110,6 +110,7 @@ class Trainer():
         self.total_batch_size = self.batch_size * self.world_size
         self.num_classes = num_classes
         self.emb_size = emb_size
+        self.device_id = device_id
 
         self.device = "cuda:{}".format(local_rank)
         self.probe_backbone = None
@@ -278,8 +279,9 @@ class Trainer():
             self.scheduler_backbone.step()
 
         total_step = global_step + step
-        callback_checkpoint_probe(total_step, self.probe_backbone, None, "probe-")
-        callback_checkpoint_gallery(total_step, self.gallery_backbone, None, "gallery-")
+        if self.device_id == 0:
+            callback_checkpoint_probe(total_step, self.probe_backbone, None, "probe-")
+            callback_checkpoint_gallery(total_step, self.gallery_backbone, None, "gallery-")
         #save_gallery_backbone_path = "gallery-backbone.pth"
         #if self.local_rank == 0:
         #    torch.save(self.gallery_backbone.state_dict(), save_gallery_backbone_path)

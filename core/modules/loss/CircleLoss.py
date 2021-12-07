@@ -23,11 +23,10 @@ class CircleLoss(Module):
         self.delta_n = margin
         self.local_rank = local_rank
         self.world_size = world_size
+        #self.iter = 0
 
     def forward(self, cos_theta: torch.Tensor, labels):
         cos_theta = cos_theta.clamp(-1, 1)
-        save_path = "dist_circle_theta_{}.pt".format(self.local_rank)
-        torch.save(cos_theta.cpu(), save_path)
         valid_label_index = torch.where(labels != -1)[0]
 
         index_pos = torch.zeros_like(cos_theta)
@@ -49,4 +48,6 @@ class CircleLoss(Module):
         output[index_pos] = logit_p[index_pos]
         output[index_neg] = logit_n[index_neg]
         output *= self.gamma
+
+        #self.iter += 1
         return output

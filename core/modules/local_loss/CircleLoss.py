@@ -34,12 +34,14 @@ class CircleLoss(Module):
         self.O_n = -margin
         self.delta_p = 1-margin
         self.delta_n = margin
+        self.iter = 0
 
     def forward(self, feats, labels):
-        kernel_norm = F.normalize(self.weight, dim=0)
+        kernel_norm = F.normalize(self.weight)
+        feats = F.normalize(feats)
         cos_theta = F.linear(feats, kernel_norm) 
         cos_theta = cos_theta.clamp(-1, 1)
-        torch.save(cos_theta.cpu(), "circle_theta.pt")
+        torch.save(cos_theta.cpu(), "circle_theta_{}.pt".format(self.iter))
         index_pos = torch.zeros_like(cos_theta)        
         index_pos.scatter_(1, labels.data.view(-1, 1), 1)
         index_pos = index_pos.byte().bool()
@@ -57,4 +59,5 @@ class CircleLoss(Module):
         output[index_pos] = logit_p[index_pos]
         output[index_neg] = logit_n[index_neg]
         output *= self.gamma
+        self.iter += 1
         return output

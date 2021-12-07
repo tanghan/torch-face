@@ -19,6 +19,7 @@ from core.models.resnet import iresnet_test as iresnet
 from core.modules.loss.ArcFace import ArcFace
 from core.modules.local_loss.ArcFace import ArcFace as localArcFace
 from core.modules.local_loss.CircleLoss import CircleLoss as localCircleLoss
+from core.modules.local_loss.MagFace import MagFace as localMagFace
 from core.modules.loss.CircleLoss import CircleLoss
 from torch.cuda.amp import GradScaler
 from utils.utils_amp import MaxClipGradScaler
@@ -47,6 +48,7 @@ def run_test(args, rank, world_size, fp16=False):
     print("start with partial {}".format(partial))
 
     dataloaer = build_dataset(rng, batch_size, num_classes, num_samples, input_shape)
+    #head_factory = HeadFactory(rank, world_size, "MagFace", "./config/head_conf.yaml")
     head_factory = HeadFactory(rank, world_size, "CircleLoss", "./config/head_conf.yaml")
     margin_softmax = head_factory.get_head()
     #margin_softmax = CircleLoss(rank, world_size)
@@ -67,22 +69,32 @@ def run_test(args, rank, world_size, fp16=False):
         img, label = data
         img = img.cuda(rank)
         label = label.to("cuda:{}".format(rank))
-        features = F.normalize(backbone(img))
+        features = backbone(img)
+        #features = F.normalize(backbone(img))
         features.retain_grad()
+
         if partial == 0:
             #x_grad, loss_v = fc.forward_backward(label, features, opt_pfc)
             
             feature_path = "p0_fea_{}.pt".format(data_idx)
             torch.save(features.cpu(), feature_path)
             logits = fc(features, label)
+            #logits, loss_g = fc(features, label)
+            loss_v = loss_fn(logits, label)
+            #loss_v = loss_v + torch.mean(loss_g)
+
             logits_path = "p0_logits_{}.pt".format(data_idx)
             torch.save(logits.cpu(), logits_path) 
-            loss_v = loss_fn(logits, label)
         elif partial == 1:
-            loss_v, loss_g = fc(features, label)
 
             feature_path = "p1_fea_{}_{}.pt".format(data_idx, rank)
             torch.save(features.cpu(), feature_path)
+            loss_v, loss_g = fc(features, label)
+
+            if loss_g is not None:
+                #print("loss g shape: {}".format(loss_g.size()))
+                loss_v = loss_v + torch.mean(loss_g) / world_size
+
         elif partial == 2:
             x_grad, loss_v = fc.forward_backward(label, features, opt_pfc)
 
@@ -102,8 +114,15 @@ def run_test(args, rank, world_size, fp16=False):
                 features.backward(x_grad)
             else:
                 loss_v.backward()
-            torch.nn.utils.clip_grad_norm_(backbone.parameters(), max_norm=5, norm_type=2)
+            #torch.nn.utils.clip_grad_norm_(backbone.parameters(), max_norm=5, norm_type=2)
             opt_backbone.step()
+
+        if partial == 0:
+
+            fea_grad_path = "p0_fea_grad_{}.pt".format(data_idx)
+        else:
+            fea_grad_path = "p1_fea_grad_{}_{}.pt".format(data_idx, rank)
+        torch.save(features.grad.cpu(), fea_grad_path)
 
         #print("fea grad:", features.grad)
         '''
@@ -121,6 +140,7 @@ def run_test(args, rank, world_size, fp16=False):
         opt_pfc.step()
         opt_backbone.zero_grad()
         opt_pfc.zero_grad()
+
 
         #print("fc grad:", fc.weight.grad)
         max_display = 0
@@ -174,6 +194,8 @@ def build_model(local_rank, world_size, num_classes, batch_size, margin_softmax,
     backbone.train()
 
     if partial == 0: 
+        #fc = localMagFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
+        #fc = localArcFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
         fc = localCircleLoss(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
         fc = fc.cuda(local_rank)
         fc = torch.nn.parallel.DistributedDataParallel(
