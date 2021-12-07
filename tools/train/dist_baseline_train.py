@@ -14,7 +14,8 @@ from core.modules.loss.head_def import HeadFactory
 from utils.callback_utils.utils_callbacks import CallBackVerification, CallBackLogging, CallBackModelCheckpoint
 from core.dataset.baseline_dataset import MXFaceDataset, DataLoaderX
 
-from core.modules.tail.partial_fc import PartialFC
+#from core.modules.tail.partial_fc import PartialFC
+from core.modules.tail.dist_partial_fc import PartialFC
 from torch.nn.utils import clip_grad_norm_
 from utils.utils_amp import MaxClipGradScaler
 from utils.logging_utils.utils_logging import AverageMeter, init_logging
@@ -172,7 +173,8 @@ class Trainer():
     def train(self, epoch, global_step, train_loader, grad_amp, loss,
             callback_logging, callback_checkpoint):
         for step, (img, label) in enumerate(train_loader):
-            features = F.normalize(self.backbone(img))
+            #features = F.normalize(self.backbone(img))
+            features = self.backbone(img)
             x_grad, loss_v = self.module_partial_fc.forward_backward(label, features, self.opt_pfc)
             if self.fp16:
                 features.backward(grad_amp.scale(x_grad))
