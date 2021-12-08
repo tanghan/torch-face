@@ -65,10 +65,20 @@ def compare_fea_grad(rank=-1, data_idx=0):
         dist_fea_list.append(torch.load(fea_path))
     dist_features = torch.cat(dist_fea_list, 1)
     dist_features = dist_features.reshape((num_samples, emb_size))
-    diff = torch.sum(torch.abs(features - dist_features[reorder_list]))
+
+    partial_fea_list = []
+    for rank_i in range(rank):
+        fea_path = "p2_fea_grad_{}_{}.pt".format(data_idx, rank_i)
+        partial_fea_list.append(torch.load(fea_path))
+
+    partial_features = torch.cat(partial_fea_list, 1)
+    dist_features = dist_features.reshape((num_samples, emb_size))
+    partial_features = dist_features.reshape((num_samples, emb_size))
+    diff1 = torch.sum(torch.abs(features - dist_features[reorder_list]))
+    diff2 = torch.sum(torch.abs(dist_features - partial_features))
     #diff = torch.sum(torch.abs(features - dist_features))
 
-    print("compare fea grad: --- \ndata idx: {} diff: {}\n------".format(data_idx, diff))
+    print("compare fea grad: --- \ndata idx: {} diff1: {}, diff2: {}\n------".format(data_idx, diff1, diff2))
     return features
 
 
@@ -143,9 +153,12 @@ def compare_opt_backbone(rank=-1, data_idx=0):
     local_backbone_w = torch.load(path)
     path = "softmax_backbone_{}.pt".format(data_idx)
     dist_backbone_w = torch.load(path)
-    diff = torch.sum(torch.abs(local_backbone_w - dist_backbone_w))
+    path = "partial_backbone_{}.pt".format(data_idx)
+    partial_backbone_w = torch.load(path)
+    diff1 = torch.sum(torch.abs(local_backbone_w - dist_backbone_w))
+    diff2 = torch.sum(torch.abs(partial_backbone_w - dist_backbone_w))
 
-    print("compare opt weights------ \n data idx: {} diff: {}".format(data_idx, diff))
+    print("compare opt weights------ \n data idx: {} diff1: {}, diff2: {}".format(data_idx, diff1, diff2))
     print(local_backbone_w[0, 0, :, :])
     print(dist_backbone_w[0, 0, :, :])
             
@@ -156,10 +169,10 @@ def compare_opt_backbone(rank=-1, data_idx=0):
 def main():
     #fc_w = compare_init_fc_weights(rank=4)
     fea = compare_fea(rank=4, data_idx=0)
-    compare_fea_grad(rank=4, data_idx=0)
+    #compare_fea_grad(rank=4, data_idx=0)
     #logits = compare_logits(rank=4, data_idx=0)
-    compare_opt_weights(rank=4, data_idx=0)
-    compare_opt_backbone(rank=4, data_idx=0)
+    compare_opt_weights(rank=4, data_idx=2)
+    compare_opt_backbone(rank=4, data_idx=2)
     #theta = compare_theta(rank=4, data_idx=0)
     #norm_w = F.normalize(fc_w)
     #out = F.linear(F.normalize(fea), norm_w)

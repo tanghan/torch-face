@@ -13,11 +13,13 @@ import numpy as np
 
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from core.modules.tail.partial_fc import PartialFC
+#from core.modules.tail.partial_fc import PartialFC
+from core.modules.tail.dist_partial_fc import PartialFC
 from core.modules.tail.dist_softmax import DistSoftmax 
 from core.models.resnet import iresnet_test as iresnet
 from core.modules.loss.ArcFace import ArcFace
 from core.modules.local_loss.ArcFace import ArcFace as localArcFace
+from core.modules.local_loss.CurricularFace import CurricularFace as localCurricularFace
 from core.modules.local_loss.CircleLoss import CircleLoss as localCircleLoss
 from core.modules.local_loss.MagFace import MagFace as localMagFace
 from core.modules.loss.CircleLoss import CircleLoss
@@ -37,7 +39,8 @@ def run_test(args, rank, world_size, fp16=False):
     batch_size = args.batch_size
     loss_type = args.loss_type
     num_classes = 12
-    num_samples = 16
+    #num_samples = 16
+    num_samples = 48
     input_shape = (3, 112, 112)
 
     partial = args.partial
@@ -48,8 +51,9 @@ def run_test(args, rank, world_size, fp16=False):
     print("start with partial {}".format(partial))
 
     dataloaer = build_dataset(rng, batch_size, num_classes, num_samples, input_shape)
-    head_factory = HeadFactory(rank, world_size, "MagFace", "./config/head_conf.yaml")
+    #head_factory = HeadFactory(rank, world_size, "MagFace", "./config/head_conf.yaml")
     #head_factory = HeadFactory(rank, world_size, "CircleLoss", "./config/head_conf.yaml")
+    head_factory = HeadFactory(rank, world_size, "CurricularFace", "./config/head_conf.yaml")
     margin_softmax = head_factory.get_head()
     #margin_softmax = CircleLoss(rank, world_size)
     backbone, fc = build_model(rank, world_size, num_classes, batch_size, margin_softmax, fp16=fp16, partial=partial)
@@ -78,10 +82,10 @@ def run_test(args, rank, world_size, fp16=False):
             
             feature_path = "p0_fea_{}.pt".format(data_idx)
             torch.save(features.cpu(), feature_path)
-            #logits = fc(features, label)
-            logits, loss_g = fc(features, label)
+            logits = fc(features, label)
+            #logits, loss_g = fc(features, label)
             loss_v = loss_fn(logits, label)
-            loss_v = loss_v + torch.mean(loss_g)
+            #loss_v = loss_v + torch.mean(loss_g)
 
             logits_path = "p0_logits_{}.pt".format(data_idx)
             torch.save(logits.cpu(), logits_path) 
@@ -96,11 +100,15 @@ def run_test(args, rank, world_size, fp16=False):
                 loss_v = loss_v + torch.mean(loss_g) / world_size
 
         elif partial == 2:
+            norm_features = F.normalize(features)
+            x_grad, loss_v = fc.forward_backward(label, norm_features, opt_pfc)
+
+        elif partial == 3:
             x_grad, loss_v = fc.forward_backward(label, features, opt_pfc)
 
         print("rank: {}, loss shape: {}, loss: {}".format(rank, loss_v.shape, loss_v))
         if fp16:
-            if partial == 2:
+            if partial == 2 or partial == 3:
                 features.backward(grad_amp.scale(x_grad))
                 #scaler.scale(loss_v).backward()
             else:
@@ -111,6 +119,8 @@ def run_test(args, rank, world_size, fp16=False):
             grad_amp.update()
         else:
             if partial == 2:
+                norm_features.backward(x_grad)
+            elif partial == 3:
                 features.backward(x_grad)
             else:
                 loss_v.backward()
@@ -121,7 +131,7 @@ def run_test(args, rank, world_size, fp16=False):
 
             fea_grad_path = "p0_fea_grad_{}.pt".format(data_idx)
         else:
-            fea_grad_path = "p1_fea_grad_{}_{}.pt".format(data_idx, rank)
+            fea_grad_path = "p{}_fea_grad_{}_{}.pt".format(partial, data_idx, rank)
         torch.save(features.grad.cpu(), fea_grad_path)
 
         #print("fea grad:", features.grad)
@@ -169,6 +179,20 @@ def run_test(args, rank, world_size, fp16=False):
                     torch.save(p.cpu(), "softmax_backbone_{}.pt".format(data_idx))
                 #print("backbone p value: {} ".format(p[0, :2, :, :]))
                 display_iter += 1
+        elif partial == 2 or partial == 3:
+            for p in fc.parameters():
+                torch.save(p.cpu(), "partial_fc_{}_{}.pt".format(data_idx, rank))
+                pass
+                #print(p[:, :5])
+
+            for p in backbone.module.parameters():
+                if display_iter > max_display:
+                    break
+                if rank == 0:
+                    torch.save(p.cpu(), "partial_backbone_{}.pt".format(data_idx))
+                #print("backbone p value: {} ".format(p[0, :2, :, :]))
+                display_iter += 1
+
 
 
 
@@ -194,9 +218,10 @@ def build_model(local_rank, world_size, num_classes, batch_size, margin_softmax,
     backbone.train()
 
     if partial == 0: 
-        fc = localMagFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes, scale=64, margin_am=0.0, l_a=10, u_a=110, l_margin=0.45, u_margin=0.8, lamda=20)
+        #fc = localMagFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes, scale=64, margin_am=0.0, l_a=10, u_a=110, l_margin=0.45, u_margin=0.8, lamda=20)
         #fc = localArcFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
         #fc = localCircleLoss(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
+        fc = localCurricularFace(local_rank, world_size, feat_dim=embedding_size, num_class=num_classes)
         fc = fc.cuda(local_rank)
         fc = torch.nn.parallel.DistributedDataParallel(
             module=fc, broadcast_buffers=False, device_ids=[local_rank])
@@ -207,7 +232,7 @@ def build_model(local_rank, world_size, num_classes, batch_size, margin_softmax,
             rank=local_rank, local_rank=local_rank, world_size=world_size, 
             batch_size=batch_size, resume=False, margin_softmax=margin_softmax, num_classes=num_classes,
             embedding_size=embedding_size)
-    elif partial == 2:
+    elif partial == 2 or partial == 3:
         fc = PartialFC(rank=local_rank, local_rank=local_rank, world_size=world_size, 
             batch_size=batch_size, resume=False, margin_softmax=margin_softmax, num_classes=num_classes,
             embedding_size=embedding_size)
