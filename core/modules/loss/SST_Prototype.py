@@ -11,6 +11,7 @@ import random
 import torch.nn.functional as F
 import torch.distributed as dist
 import numpy as np
+import gc
 
 class SST_Prototype(Module):
     """Implementation for "Semi-Siamese Training for Shallow Face Learning".
@@ -28,14 +29,16 @@ class SST_Prototype(Module):
         self.device = "cuda:{}".format(self.local_rank)
         # initialize the prototype queue
         self.rng = np.random.RandomState(seed) 
-        self.register_buffer('queue', torch.tensor(self.rng.uniform(size=(feat_dim, queue_size), low=-1., high=1), dtype=torch.float32).renorm_(2,1,1e-5).mul_(1e5).to(self.device))
+        queue = self.rng.uniform(size=(feat_dim, queue_size), low=-1., high=1)
+        queue = torch.tensor(queue, dtype=torch.float32).renorm_(2, 1, 1e-5).mul_(1e5)
+        queue = F.normalize(queue)
+        self.register_buffer('queue', queue)
         self.label_list = [-1] * queue_size
-        self.queue = F.normalize(self.queue, p=2, dim=0) # normalize the initial queue.
         self.index = 0
         self.total_labels = torch.zeros(self.batch_size * self.world_size, device=self.device, dtype=torch.long) * -1
-        self.register_buffer('exchange_fea_g1', torch.zeros(feat_dim, self.batch_size * self.world_size, device=self.device))
-        self.register_buffer('exchange_fea_g2', torch.zeros(feat_dim, self.batch_size * self.world_size, device=self.device))
-        self.register_buffer('total_ids', torch.zeros(self.batch_size * self.world_size, dtype=torch.long, device=self.device))
+        self.register_buffer('exchange_fea_g1', torch.zeros(feat_dim, self.batch_size * self.world_size))
+        self.register_buffer('exchange_fea_g2', torch.zeros(feat_dim, self.batch_size * self.world_size))
+        self.register_buffer('total_ids', torch.zeros(self.batch_size * self.world_size, dtype=torch.long))
 
     def add_margin(self, cos_theta, label, batch_size):
         cos_theta = cos_theta.clamp(-1, 1) 
@@ -83,7 +86,7 @@ class SST_Prototype(Module):
         '''
         rank = dist.get_rank()
         batch_size = p1.shape[0]
-        label = (torch.LongTensor([range(batch_size)]) + self.index + self.rank * batch_size)
+        label = (torch.LongTensor([range(batch_size)]) + self.index + rank * batch_size)
         label = label.squeeze().to(self.device)
         d_g1 = g1.clone().detach()
         d_g2 = g2.clone().detach()
@@ -114,5 +117,5 @@ class SST_Prototype(Module):
                 self.label_list[self.index + image_id] = self.total_labels[image_id].item()
             self.index = (self.index + batch_size * self.world_size) % self.queue_size
 
-        id_set = self.get_id_set()
-        return output1, output2, label, id_set
+        #id_set = self.get_id_set()
+        return output1, output2, label

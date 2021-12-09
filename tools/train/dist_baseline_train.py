@@ -45,7 +45,7 @@ def run_train(args, device_id, local_rank, world_size):
     init_logging(device_id, output_dir)
 
     num_images = num_samples
-    num_epoch = 20
+    num_epoch = 60
 
     total_step = num_images // (batch_size * world_size)
     print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}, world size: {}, device_id: {}".format(num_samples,
@@ -100,7 +100,8 @@ class Trainer():
         self.warmup_step = self.num_images // self.total_batch_size * warmup_epoch
         self.total_step = self.num_images // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
-        self.decay_epoch = [8, 12, 15, 18]
+        #self.decay_epoch = [8, 12, 15, 18]
+        self.decay_epoch = [32, 48, 54, 58]
         #self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
         self.weights_path = weights_path

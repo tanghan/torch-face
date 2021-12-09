@@ -273,7 +273,7 @@ class Trainer():
                 self.opt_backbone.step()
 
             self.opt_backbone.zero_grad()
-            loss.update(loss_v, 1)
+            loss.update(loss_v.detach(), 1)
             self.moving_average(self.alpha)
             callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
             self.scheduler_backbone.step()

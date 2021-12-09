@@ -98,7 +98,9 @@ class Trainer():
         self.warmup_step = self.num_images // self.total_batch_size * warmup_epoch
         self.total_step = self.num_images // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
-        self.decay_epoch = [8, 12, 15, 18]
+        #self.decay_epoch = [8, 12, 15, 18]
+        #self.decay_epoch = [8, 12, 15, 18]
+        self.decay_epoch = [32, 48, 54, 58]
         #self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
         self.weights_path = weights_path
