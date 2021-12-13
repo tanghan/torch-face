@@ -153,33 +153,17 @@ class IResNet(nn.Module):
             x = self.conv1(x)
             x = self.bn1(x)
             x = self.prelu(x)
-            x = self.layer1(x)
-            x = self.layer2(x)
-            x = self.layer3(x)
-            x = self.layer4(x)
-            x = self.bn2(x)
-            x = torch.flatten(x, 1)
-            x = self.dropout(x)
-        x = self.fc(x.float() if self.fp16 else x)
-        x = self.features(x)
-        return x
-
-    def extract_feature(self, x):
-        with torch.cuda.amp.autocast(self.fp16):
-            x = self.conv1(x)
-            x = self.bn1(x)
-            x = self.prelu(x)
             feat1 = self.layer1(x)
             feat2 = self.layer2(feat1)
             feat3 = self.layer3(feat2)
             x = self.layer4(feat3)
             feat4 = self.bn2(x)
+
             x = torch.flatten(feat4, 1)
             x = self.dropout(x)
         x = self.fc(x.float() if self.fp16 else x)
         x = self.features(x)
         return [feat1, feat2, feat3, feat4], x
-
 
 def _iresnet(arch, block, layers, pretrained, progress, **kwargs):
     model = IResNet(block, layers, **kwargs)
