@@ -4,7 +4,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 import numpy as np
 import argparse
 
-def parse_feature(feature_dir, part_num, samples_num, save_labels=False):
+def parse_feature(feature_dir, part_num, samples_num, save_labels=False, emb_size=512):
     valid_part = np.arange(part_num)
 
     prefix_list = []
@@ -20,7 +20,7 @@ def parse_feature(feature_dir, part_num, samples_num, save_labels=False):
     print("remainder: {}".format(remainder))
     remainder_fea = []
     remainder_label = []
-    padding_fea = np.zeros(shape=(1, 512), dtype=np.float32)
+    padding_fea = np.zeros(shape=(1, emb_size), dtype=np.float32)
     if remainder > 0:
         padding_list = [i for i in range(remainder, part_num)]
     else:
@@ -46,7 +46,7 @@ def parse_feature(feature_dir, part_num, samples_num, save_labels=False):
             print("label shape: {}".format(label_list[i].shape))
 
         fea = np.fromfile(fea_path, dtype=np.float32)
-        fea = fea.reshape(-1, 512)
+        fea = fea.reshape(-1, emb_size)
 
         if i in padding_list:
             print("do padding: {}".format(i))
@@ -55,7 +55,7 @@ def parse_feature(feature_dir, part_num, samples_num, save_labels=False):
         fea_list.append(fea)
 
     features = np.concatenate(fea_list, -1)
-    features = features.reshape(-1, 512)
+    features = features.reshape(-1, emb_size)
     print(features.shape)
     label = None
     index = None
@@ -74,8 +74,9 @@ def main(args):
     output_dir = args.output_dir
     total_num = args.total_num
     part_num = args.part_num
+    emb_size = args.emb_size
     save_labels = args.save_labels
-    features, label, index  = parse_feature(feature_dir, part_num, total_num, save_labels)
+    features, label, index  = parse_feature(feature_dir, part_num, total_num, save_labels, emb_size)
     features = features[:total_num]
     dst_path = "feature.npy"
     dst_path = os.path.join(output_dir, dst_path)
@@ -102,6 +103,7 @@ if __name__ == "__main__":
     parser.add_argument("--part_num", type=int, default=3, help="")
     parser.add_argument("--output_dir", type=str, default="/home/users/han.tang/data/eval/features/ValLife/cache_feature/subcenter", help="")
     parser.add_argument("--total_num", type=int, default=15498, help="")
+    parser.add_argument("--emb_size", type=int, default=512, help="")
     parser.add_argument("--save_labels", action="store_true", help="")
     args = parser.parse_args()
     main(args)

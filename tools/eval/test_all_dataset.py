@@ -14,16 +14,16 @@ val30w_gallery_info = TestInfo(dataset_name="Val30W_gallery", dataset_type="rec"
 dms_info = TestInfo(dataset_name="Val_DMS_Car", dataset_type="rec", total_num=4677, output_dir="/home/users/han.tang/data/eval/features/Val_DMS_Car/cache_feature/subcenter")
 
 test_list = []
-test_list.append(ijbc_info)
+#test_list.append(ijbc_info)
 test_list.append(j2_info)
 test_list.append(life_info)
 test_list.append(id_info)
-test_list.append(val30w_query_info)
-test_list.append(val30w_gallery_info)
-test_list.append(dms_info)
+#test_list.append(val30w_query_info)
+#test_list.append(val30w_gallery_info)
+#test_list.append(dms_info)
 
 
-def do_all_feature_extract(gpu_num, weight_path, batch_size):
+def do_all_feature_extract(gpu_num, weight_path, batch_size, emb_size, kd_test, fp16=True, norm=True):
     for test_info in test_list:
         dataset_name = test_info.dataset_name
         dataset_type = test_info.dataset_type
@@ -36,8 +36,13 @@ def do_all_feature_extract(gpu_num, weight_path, batch_size):
         command_feature_extract += "--gpu_num {} ".format(gpu_num)
         command_feature_extract += "--weight_path {} ".format(weight_path)
         command_feature_extract += "--batch_size {} ".format(batch_size)
-        command_feature_extract += "--norm "
-        command_feature_extract += "--fp16"
+        command_feature_extract += "--emb_size {} ".format(emb_size)
+        if kd_test:
+            command_feature_extract += "--kd_test ".format(emb_size)
+        if fp16:
+            command_feature_extract += "--fp16 "
+        if norm:
+            command_feature_extract += "--norm "
         print(command_feature_extract)
         assert os.system(command_feature_extract) == 0
 
@@ -45,6 +50,7 @@ def do_all_feature_extract(gpu_num, weight_path, batch_size):
         command_combine += "--part_num {} ".format(gpu_num)
         command_combine += "--total_num {} ".format(total_num)
         command_combine += "--output_dir {} ".format(output_dir)
+        command_combine += "--emb_size {} ".format(emb_size)
         command_combine += "--save_labels"
         print(command_combine)
         assert os.system(command_combine) == 0
@@ -54,13 +60,21 @@ def main(args):
     gpu_num = args.gpu_num
     weight_path = args.weight_path
     batch_size = args.batch_size
-    do_all_feature_extract(gpu_num, weight_path, batch_size)
+    emb_size = args.emb_size
+    #fp16 = args.fp16
+    kd_test = args.kd_test
+    #norm = args.norm
+    do_all_feature_extract(gpu_num, weight_path, batch_size, emb_size, kd_test=kd_test)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="eval")
     parser.add_argument("--gpu_num", type=int, default=4, help="")
     parser.add_argument("--batch_size", type=int, default=512, help="")
+    parser.add_argument("--emb_size", type=int, default=512, help="")
     parser.add_argument("--weight_path", type=str, default="/home/users/han.tang/workspace/pretrain_models/glint360k_cosface_r100_fp16_0.1/backbone.pth", help="")
+    parser.add_argument("--kd_test", action="store_true", help="")
+    #parser.add_argument("--norm", action="store_true", help="")
+    #parser.add_argument("--fp16", action="store_true", help="")
     args = parser.parse_args()
     main(args)
 

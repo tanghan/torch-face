@@ -49,7 +49,7 @@ dataset_dict = {"lfw": ["/home/users/han.tang/data/public_face_data/glint/glint3
 
 class Eval(object):
 
-    def __init__(self, local_rank, weight_path, fp16=True, emb_size=512, flip=False, with_index=False):
+    def __init__(self, local_rank, weight_path, fp16=True, emb_size=512, flip=False, with_index=False, kd_test=False):
         self.backbone = None
         self.local_rank = local_rank
         self.fp16 = fp16
@@ -58,14 +58,25 @@ class Eval(object):
         self.device = "cuda:{}".format(local_rank)
         self.weight_path = weight_path
         self.with_index = with_index
+        self.kd_test = kd_test
         self.prepare()
 
     def network_init(self):
         self.backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
         self.backbone.to(self.device)
 
-        self.backbone.load_state_dict(torch.load(self.weight_path, 
-            map_location=torch.device(self.local_rank)))
+        state_dict = torch.load(self.weight_path, 
+            map_location=torch.device(self.local_rank))
+        
+        if self.kd_test:
+            backbone_state_dict = dict()
+            prefix_len = len("s_backbone.")
+            for k, v in state_dict.items():
+                if k.find("s_backbone") == 0:
+                    backbone_state_dict[k[prefix_len:]] = v
+            self.backbone.load_state_dict(backbone_state_dict)
+        else:
+            self.backbone.load_state_dict(state_dict)
 
         self.backbone = torch.nn.parallel.DistributedDataParallel(
             module=self.backbone, broadcast_buffers=False, device_ids=[self.local_rank])
@@ -160,8 +171,10 @@ def run(args, rank, world_size):
     batch_size = args.batch_size
     fp16 = args.fp16
     norm = args.norm
+    emb_size = args.emb_size
+    kd_test = args.kd_test
 
-    test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=fp16)
+    test = Eval(rank, weight_path=args.weight_path, emb_size=emb_size, fp16=fp16, kd_test=kd_test)
     if dataset_type == "rec":
         dataloader, total_num = build_rec_dataset(dataset_dict[dataset_name][0],
                 dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
@@ -212,7 +225,7 @@ def run(args, rank, world_size):
         #print(embed_num, embed.shape)
         embed = embed.cpu().numpy().astype(np.float32)
         embed = embed.reshape(-1)
-        raw_data = struct.pack("f" * 512, *embed)
+        raw_data = struct.pack("f" * emb_size, *embed)
         fw.write(raw_data)
     fw.close()
 
@@ -241,6 +254,8 @@ if __name__ == "__main__":
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--fp16", action="store_true", help="")
     parser.add_argument("--norm", action="store_true", help="")
+    parser.add_argument("--emb_size", type=int, default=512, help="")
+    parser.add_argument("--kd_test", action="store_true", help="")
     args = parser.parse_args()
     main(args)
 
