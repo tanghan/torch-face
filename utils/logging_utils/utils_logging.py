@@ -7,11 +7,12 @@ class AverageMeter(object):
     """Computes and stores the average and current value
     """
 
-    def __init__(self):
+    def __init__(self, name="loss"):
         self.val = None
         self.avg = None
         self.sum = None
         self.count = None
+        self.name = name
         self.reset()
 
     def reset(self):

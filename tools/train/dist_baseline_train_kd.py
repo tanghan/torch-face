@@ -26,7 +26,7 @@ import mpi4py.MPI as MPI
 def run_train(args, device_id, local_rank, world_size):
     torch.cuda.set_device(local_rank)
     batch_size = args.batch_size
-    sample_rate = args.sample_rate
+    sample_rate = 1.
     backbone_lr_ratio = args.backbone_lr_ratio
     weights_path = args.weights_path
     fc_prefix = args.fc_prefix
@@ -45,7 +45,7 @@ def run_train(args, device_id, local_rank, world_size):
     init_logging(device_id, output_dir)
 
     num_images = num_samples
-    num_epoch = 20
+    num_epoch = 60
 
     total_step = num_images // (batch_size * world_size)
     print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}, world size: {}, device_id: {}".format(num_samples,
@@ -79,7 +79,7 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 
 class Trainer():
 
-    def __init__(self, device_id, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=256, num_epoch=12, 
+    def __init__(self, device_id, local_rank, world_size, num_classes, num_images, batch_size=128, t_emb_size=512, s_emb_size=256, num_epoch=12, 
             sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface"):
         self.local_rank = local_rank
         self.world_size = world_size
@@ -100,12 +100,17 @@ class Trainer():
         self.warmup_step = self.num_images // self.total_batch_size * warmup_epoch
         self.total_step = self.num_images // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
-        self.decay_epoch = [8, 12, 15, 18]
-        #self.decay_epoch = [32, 48, 54, 58]
+        #self.decay_epoch = [8, 12, 15, 18]
+        self.decay_epoch = [32, 48, 54, 58]
         #self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
         self.weights_path = weights_path
         self.fc_prefix = fc_prefix
+        self.t_emb_size = t_emb_size
+        self.s_emb_size = s_emb_size
+
+        self.t_backbone = None
+        self.s_backbone = None
 
         self.backbone_lr_ratio = backbone_lr_ratio
         self.resume = resume
@@ -116,18 +121,19 @@ class Trainer():
         self.prepare()
 
     def network_init(self):
-        backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
+        t_backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.t_emb_size)
+        s_backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.b_emb_size)
 
-        if self.resume:
-            backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
+        t_backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
 
-            logging.info("resume network from {}".format(self.weights_path))
+        logging.info("resume network from {}".format(self.weights_path))
 
-        #backbone = backbone.to(self.device)
-        backbone.cuda(self.local_rank)
-        self.backbone = torch.nn.parallel.DistributedDataParallel(backbone, broadcast_buffers=False, 
+        t_backbone = t_backbone.cuda(self.local_rank)
+        b_backbone = b_backbone.cuda(self.local_rank)
+        self.s_backbone = torch.nn.parallel.DistributedDataParallel(s_backbone, broadcast_buffers=False, 
                 device_ids=[self.local_rank])
-        self.backbone.train()
+        self.s_backbone.train()
+        self.t_backbone.train()
         logging.info("init network at {} finished".format(self.local_rank))
 
 
@@ -151,7 +157,7 @@ class Trainer():
                 return 0.1 ** len([m for m in decay_step if m <= current_step])
 
         self.opt_backbone = torch.optim.SGD(
-            params=[{'params': self.backbone.parameters()}],
+            params=[{'params': self.s_backbone.parameters()}],
             lr=lr / 512 * self.batch_size * self.world_size * self.backbone_lr_ratio,
             momentum=0.9, weight_decay=5e-4)
 
@@ -175,8 +181,10 @@ class Trainer():
             callback_logging, callback_checkpoint):
         for step, (img, label) in enumerate(train_loader):
             #features = F.normalize(self.backbone(img))
-            features = self.backbone(img)
-            x_grad, loss_v = self.module_partial_fc.forward_backward(label, features, self.opt_pfc)
+            with torch.no_grad():
+                t_features = self.t_backbone(img)
+            s_features = self.s_backbone(img)
+            x_grad, loss_v = self.module_partial_fc.forward_backward(label, s_features, self.opt_pfc)
             if self.fp16:
                 features.backward(grad_amp.scale(x_grad))
                 grad_amp.unscale_(self.opt_backbone)

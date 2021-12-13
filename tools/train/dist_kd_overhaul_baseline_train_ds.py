@@ -7,19 +7,123 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import torch.multiprocessing as mp
+from torch import nn
 
 from core.models.resnet import iresnet
 from core.modules.loss.losses import get_loss
 from core.modules.loss.head_def import HeadFactory
-from utils.callback_utils.utils_callbacks import CallBackVerification, CallBackLogging, CallBackModelCheckpoint
+from utils.callback_utils.utils_callbacks import CallBackVerification, CallBackLoggingList, CallBackModelCheckpoint
 from core.dataset.baseline_dataset import MXFaceDataset, DataLoaderX
 
 from core.modules.tail.dist_softmax import DistSoftmax
 from torch.nn.utils import clip_grad_norm_
 from utils.utils_amp import MaxClipGradScaler
 from utils.logging_utils.utils_logging import AverageMeter, init_logging
+from scipy.stats import norm
+import math
 import mpi4py.MPI as MPI
+import numpy as np
 
+def distillation_loss(source, target, margin):
+    target = torch.max(target, margin)
+    loss = torch.nn.functional.mse_loss(source, target, reduction="none")
+    loss = loss * ((source > target) | (target > 0)).float()
+    return loss.sum()
+
+def get_margin_from_BN(bn, rank=0):
+    margin = []
+    std = bn.weight.data
+    mean = bn.bias.data
+    for (s, m) in zip(std, mean):
+        s = float(abs(s.item()))
+        m = float(m.item())
+        if s < 1e-6:
+            s = 1e-6
+        thresh_1 = -m /s
+        thresh = norm.cdf(thresh_1)
+
+        if thresh > 0.001:
+            margin_ = - s * math.exp(- (m / s) ** 2 / 2) / math.sqrt(2 * math.pi) / norm.cdf(-m / s) + m
+        else:
+            margin_ = -3 * s
+        margin.append(margin_)
+        #if rank == 0:
+        #    print(np.max(np.abs(margin_)))
+
+    return torch.FloatTensor(margin).to(std.device)
+
+def build_feature_connector(t_channel, s_channel):
+    C = [nn.Conv2d(s_channel, t_channel, kernel_size=1, stride=1, padding=0, bias=False),
+         nn.BatchNorm2d(t_channel)]
+
+    for m in C:
+        if isinstance(m, nn.Conv2d):
+            n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            m.weight.data.normal_(0, math.sqrt(2. / n))
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()
+
+    return nn.Sequential(*C)
+
+
+class StudentBackbone(nn.Module):
+
+    def __init__(self, device_id, local_rank, world_size, s_emb_size, t_emb_size, fp16=True, kd_last=False):
+        super(StudentBackbone, self).__init__()
+        self.out = None
+        self.device_id = device_id
+        self.local_rank = local_rank
+        self.world_size = world_size
+        self.fp16 = fp16
+        self.out = None
+        self.s_backbone = None
+        self.s_emb_size = s_emb_size
+        self.t_emb_size = t_emb_size
+
+        t_channels = [64, 128, 256, 512]
+        s_channels = [64, 128, 256, 512]
+        self.feat_num = len(s_channels)
+
+        self.Connectors = nn.ModuleList([build_feature_connector(t, s) for t, s in zip(t_channels, s_channels)])
+        self.build_backbone()
+        self.out = None
+        if kd_last:
+            self.build_output_layer()
+
+    def build_backbone(self):
+        self.s_backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.s_emb_size)
+
+    def build_output_layer(self):
+        self.out = nn.Sequential(
+                nn.Linear(self.s_emb_size, self.t_emb_size),
+                nn.BatchNorm1d(self.t_emb_size)
+                )
+
+    def build_margin(self, teacher_bns):
+
+        margins = [get_margin_from_BN(bn, self.device_id) for bn in teacher_bns]
+        for i, margin in enumerate(margins):
+            self.register_buffer('margin%d' % (i+1), margin.unsqueeze(1).unsqueeze(2).unsqueeze(0).detach())
+
+
+    def forward(self, x, t_feats):
+        feats, logits = self.s_backbone.extract_feature(x)
+        loss_distill = 0.
+        kd_logits = None
+        for i in range(self.feat_num):
+            if self.fp16:
+                upper_feats = self.Connectors[i](feats[i].float())
+
+                loss_distill_ = distillation_loss(upper_feats, t_feats[i].float().detach(), getattr(self, 'margin%d' % (i+1))) / 2 ** (self.feat_num - i - 1)
+            else:
+                upper_feats = self.Connectors[i](feats[i])
+                loss_distill_ = distillation_loss(upper_feats, t_feats[i].detach(), getattr(self, 'margin%d' % (i+1))) / 2 ** (self.feat_num - i - 1)
+            loss_distill += loss_distill_
+        if self.out is not None:
+            kd_logits = self.out(logits.float() if self.fp16 else logits)
+
+        return loss_distill, logits, kd_logits
 
 def run_train(args, device_id, local_rank, world_size):
     torch.cuda.set_device(local_rank)
@@ -29,8 +133,8 @@ def run_train(args, device_id, local_rank, world_size):
     weights_path = args.weights_path
     fc_prefix = args.fc_prefix
     loss_type = args.loss_type
+    kd_last = args.kd_last
     resume = args.resume
-    emb_size = args.emb_size
     fp16 = args.fp16
 
     output_dir = args.output_dir
@@ -51,17 +155,18 @@ def run_train(args, device_id, local_rank, world_size):
     print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}, use fp16: {}".format(num_samples,
         num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume, fp16))
 
-    trainer = Trainer(device_id, local_rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type, fp16=fp16, emb_size=emb_size)
-    callback_logging = CallBackLogging(50, device_id, total_step, batch_size, world_size, None)
+    trainer = Trainer(device_id, local_rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type, fp16=fp16, kd_last=kd_last)
+    callback_logging = CallBackLoggingList(50, device_id, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(device_id, output_dir)
 
     global_step = 0 
 
     grad_amp = MaxClipGradScaler(batch_size, 128 * batch_size, growth_interval=100) if fp16 else None
-    loss = AverageMeter()
+    loss_log = AverageMeter(name="total loss")
+    kd_loss_log = AverageMeter(name="kd loss")
     for epoch in range(0, num_epoch):
         train_sampler.set_epoch(epoch)
-        total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss, callback_logging, callback_checkpoint) 
+        total_step = trainer.train(epoch, global_step, train_loader, grad_amp, loss_log, kd_loss_log, callback_logging, callback_checkpoint) 
         global_step = total_step
 
 def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro=False):
@@ -78,18 +183,16 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 
 class Trainer():
 
-    def __init__(self, device_id, local_rank, world_size, num_classes, num_images, batch_size=128, emb_size=512, num_epoch=12, 
-            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface", fp16=True):
+    def __init__(self, device_id, local_rank, world_size, num_classes, num_images, batch_size=128, t_emb_size=512, s_emb_size=256, num_epoch=12, 
+            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface", fp16=True, kd_last=False):
         self.device_id = device_id
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
         self.total_batch_size = self.batch_size * self.world_size
         self.num_classes = num_classes
-        self.emb_size = emb_size
 
         self.device = "cuda:{}".format(local_rank)
-        self.backbone = None
         self.module_fc = None
         self.loss_fn = None
         self.num_images = num_images
@@ -106,9 +209,13 @@ class Trainer():
         self.sample_rate = sample_rate
         self.weights_path = weights_path
         self.fc_prefix = fc_prefix
+        self.s_backbone = None
+        self.t_backbone = None
+        self.t_emb_size = t_emb_size
+        self.s_emb_size = s_emb_size
+        self.kd_last = kd_last
 
         self.backbone_lr_ratio = backbone_lr_ratio
-        self.resume = resume
         self.loss_type = loss_type
         self.head_conf = "config/head_conf.yaml"
         self.head_factory = HeadFactory(self.local_rank, self.world_size, self.loss_type, self.head_conf)
@@ -116,17 +223,20 @@ class Trainer():
         self.prepare()
 
     def network_init(self):
-        backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
+        self.t_backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.t_emb_size)
 
-        if self.resume:
-            backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
+        self.t_backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
+        self.t_backbone = self.t_backbone.to(self.device)
+        self.t_backbone.eval()
 
-            logging.info("resume network from {}".format(self.weights_path))
+        logging.info("resume network from {}".format(self.weights_path))
+        s_backbone = StudentBackbone(self.device_id, self.local_rank, self.world_size, t_emb_size=self.t_emb_size, s_emb_size=self.s_emb_size, fp16=self.fp16)
+        s_backbone.build_margin(self.t_backbone.get_bn_before_relu())
 
-        backbone = backbone.to(self.device)
-        self.backbone = torch.nn.parallel.DistributedDataParallel(
-            module=backbone, broadcast_buffers=False, device_ids=[self.local_rank])
-        self.backbone.train()
+        s_backbone = s_backbone.to(self.device)
+        self.s_backbone = torch.nn.parallel.DistributedDataParallel(
+            module=s_backbone, broadcast_buffers=False, device_ids=[self.local_rank])
+        self.s_backbone.train()
         logging.info("init network at {} finished".format(self.local_rank))
 
 
@@ -137,9 +247,9 @@ class Trainer():
     def set_tail(self, loss_fn):
 
         self.module_fc = DistSoftmax(
-            rank=self.device_id, local_rank=self.local_rank, world_size=self.world_size, resume=self.resume,
+            rank=self.device_id, local_rank=self.local_rank, world_size=self.world_size, resume=False,
             batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes,
-            embedding_size=self.emb_size)
+            embedding_size=self.s_emb_size)
 
     def set_optimizer(self, lr):
         def lr_step_func(current_step):
@@ -150,7 +260,7 @@ class Trainer():
                 return 0.1 ** len([m for m in decay_step if m <= current_step])
 
         self.opt_backbone = torch.optim.SGD(
-            params=[{'params': self.backbone.parameters()}],
+            params=[{'params': self.s_backbone.parameters()}],
             lr=lr / 512 * self.batch_size * self.world_size * self.backbone_lr_ratio,
             momentum=0.9, weight_decay=5e-4)
 
@@ -170,16 +280,28 @@ class Trainer():
         self.network_init()
         self.set_loss()
         self.set_tail(loss_fn=self.loss_fn)
-        self.set_optimizer(lr=0.05)
+        self.set_optimizer(lr=0.1)
 
     
-    def train(self, epoch, global_step, train_loader, grad_amp, loss,
+    def train(self, epoch, global_step, train_loader, grad_amp, loss_log, kd_loss_log,
             callback_logging, callback_checkpoint):
         for step, (img, label) in enumerate(train_loader):
 
-            features = self.backbone(img)
-
-            loss_v, loss_g = self.module_fc(features, label)
+            with torch.no_grad():
+                t_feats, t_logits = self.t_backbone.extract_feature(img)
+                if self.kd_last:
+                    t_logits = F.normalize(t_logits)
+            distill_loss, s_logits, kd_logits = self.s_backbone(img, t_feats)
+            
+            loss_v, loss_g = self.module_fc(s_logits, label)
+            if kd_logits is not None:
+                kd_features = F.normalize(kd_logits)
+                kd_loss = (1. - (t_logits * kd_logits).sum(dim=1).mean())
+                loss_v += kd_loss
+            distill_loss = distill_loss.sum() / self.world_size / self.batch_size / 10000
+            print("rank: {}, distill_loss: {}, loss_v: {}".format(self.device_id, distill_loss, loss_v))
+            loss_v += distill_loss
+                    
             if loss_g is not None:
                 loss_v += loss_v + torch.mean(loss_g) / self.world_size
 
@@ -187,25 +309,30 @@ class Trainer():
                 grad_amp.scale(loss_v).backward()
                 dist.barrier()
                 grad_amp.unscale_(self.opt_backbone)
-                torch.nn.utils.clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
+                torch.nn.utils.clip_grad_norm_(self.s_backbone.parameters(), max_norm=5, norm_type=2)
                 grad_amp.step(self.opt_backbone)
                 grad_amp.update()
             else:
                 loss_v.backward()
                 dist.barrier()
-                torch.nn.utils.clip_grad_norm_(self.backbone.parameters(), max_norm=5, norm_type=2)
+                torch.nn.utils.clip_grad_norm_(self.s_backbone.parameters(), max_norm=5, norm_type=2)
                 self.opt_backbone.step()
 
             self.opt_pfc.step()
             self.opt_backbone.zero_grad()
             self.opt_pfc.zero_grad()
-            loss.update(loss_v, 1)
-            callback_logging(step + global_step, loss, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
+            loss_log.update(loss_v.detach(), 1)
+            if kd_logits is not None:
+                kd_loss_log.update(kd_loss.detach() + distill_loss.detach(), 1)
+            else:
+                kd_loss_log.update(distill_loss.detach(), 1)
+            log_list = [loss_log, kd_loss_log]
+            callback_logging(step + global_step, log_list, epoch, self.fp16, self.scheduler_backbone.get_last_lr()[0], grad_amp)
             self.scheduler_backbone.step()
             self.scheduler_pfc.step()
         total_step = global_step + step
         if self.device_id == 0:
-            callback_checkpoint(total_step, self.backbone, self.module_fc)
+            callback_checkpoint(total_step, self.s_backbone, self.module_fc)
 
         return total_step        
 
@@ -247,7 +374,7 @@ if __name__ == "__main__":
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--loss_type", type=str, default="arcface", help="")
     parser.add_argument("--fp16", action="store_true", help="")
-    parser.add_argument("--emb_size", type=int, default=512, help="")
+    parser.add_argument("--kd_last", action="store_true", help="")
     parser.add_argument(
         "--dist-url",
         type=str,
