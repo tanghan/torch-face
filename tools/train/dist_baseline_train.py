@@ -31,6 +31,7 @@ def run_train(args, device_id, local_rank, world_size):
     weights_path = args.weights_path
     fc_prefix = args.fc_prefix
     loss_type = args.loss_type
+    emb_size = args.emb_size
     resume = args.resume
 
     output_dir = args.output_dir
@@ -45,18 +46,18 @@ def run_train(args, device_id, local_rank, world_size):
     init_logging(device_id, output_dir)
 
     num_images = num_samples
-    num_epoch = 20
+    num_epoch = 60
 
     total_step = num_images // (batch_size * world_size)
     print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}, world size: {}, device_id: {}".format(num_samples,
         num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume, world_size, device_id))
 
-    trainer = Trainer(device_id, local_rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type)
+    trainer = Trainer(device_id, local_rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type, emb_size=emb_size)
     callback_logging = CallBackLogging(50, device_id, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(device_id, output_dir)
 
     global_step = 0 
-    fp16=True
+    fp16 = True
 
     grad_amp = MaxClipGradScaler(batch_size, 128 * batch_size, growth_interval=100) if fp16 else None
     loss = AverageMeter()
@@ -100,8 +101,8 @@ class Trainer():
         self.warmup_step = self.num_images // self.total_batch_size * warmup_epoch
         self.total_step = self.num_images // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
-        self.decay_epoch = [8, 12, 15, 18]
-        #self.decay_epoch = [32, 48, 54, 58]
+        #self.decay_epoch = [8, 12, 15, 18]
+        self.decay_epoch = [32, 48, 54, 58]
         #self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
         self.weights_path = weights_path
@@ -116,7 +117,7 @@ class Trainer():
         self.prepare()
 
     def network_init(self):
-        backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
+        backbone = iresnet.iresnet180(dropout=0.0, fp16=self.fp16, num_features=self.emb_size)
 
         if self.resume:
             backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
@@ -237,6 +238,7 @@ if __name__ == "__main__":
     parser.add_argument("--backbone_lr_ratio", type=float, default=0.1, help="")
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--loss_type", type=str, default="arcface", help="")
+    parser.add_argument("--emb_size", type=int, default=512, help="")
     parser.add_argument(
         "--dist-url",
         type=str,

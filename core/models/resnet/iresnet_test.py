@@ -68,6 +68,7 @@ class IResNet(nn.Module):
         if len(replace_stride_with_dilation) != 3:
             raise ValueError("replace_stride_with_dilation should be None "
                              "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
+        print("irenet fp16: {}".format(fp16))
         self.groups = groups
         self.base_width = width_per_group
         self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=3, stride=1, padding=1, bias=False)
@@ -144,6 +145,23 @@ class IResNet(nn.Module):
         x = self.fc(x.float() if self.fp16 else x)
         #x = self.features(x)
         return x
+
+    def extract_feature(self, x):
+        with torch.cuda.amp.autocast(self.fp16):
+            x = self.conv1(x)
+            #x = self.bn1(x)
+            x = self.prelu(x)
+            feat1 = self.layer1(x)
+            feat2 = self.layer2(feat1)
+            feat3 = self.layer3(feat2)
+            feat4 = self.layer4(feat3)
+            #feat4 = self.bn2(x)
+            x = torch.flatten(feat4, 1)
+            x = self.dropout(x)
+        x = self.fc(x.float() if self.fp16 else x)
+        #x = self.features(x)
+        return [feat1, feat2, feat3, feat4], x
+
 
 
 def _iresnet(arch, block, layers, pretrained, progress, **kwargs):

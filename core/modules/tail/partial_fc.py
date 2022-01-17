@@ -64,6 +64,7 @@ class PartialFC(Module):
         self.weight_mom_name = os.path.join(self.prefix, "rank_{}_softmax_weight_mom.pt".format(self.rank))
         self.generator = None
 
+        logging.info("use partial fc, rank: {}, num_local: {}, emb_size: {}".format(self.rank, self.num_local, self.embedding_size))
         if resume:
             try:
                 logging.info("softmax weight resume from {}".format(self.weight_name))

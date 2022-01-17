@@ -21,65 +21,93 @@ def compare_init_fc_weights(rank=4):
     print("init fc compare: {}".format(diff))
     return local_w
 
-def compare_fea(rank=-1, data_idx=0):
-    fea_path = "p0_fea_{}.pt".format(data_idx)
-    features = torch.load(fea_path) 
-    num_samples = features.size()[0]
-    emb_size = features.size()[1]
+def compare_fea(rank_list=[-1, 2], data_idx=0):
+    
+    rank0 = rank_list[0]
+    if rank0 == -1:
+        fea_path = "p0_fea_{}.pt".format(data_idx)
+        features = torch.load(fea_path) 
+        num_samples, emb_size = features.size()
+    else:
 
+        dist_fea_list = []
+        for rank_i in range(rank0):
+            fea_path = "p0_fea_{}_{}.pt".format(data_idx, rank_i)
+            feas = torch.load(fea_path)
+            local_num_samples, emb_size = feas.size()
+            dist_fea_list.append(feas)
+        num_samples = local_num_samples * rank0
+        dist_features = torch.cat(dist_fea_list, 1)
+        dist_features = dist_features.reshape((num_samples, emb_size))
+        p1_features = dist_features
+
+    if rank0 == -1:
+        dist_fea_list = []
+        reorder_list = []
+        for i in range(rank):
+            reorder = np.arange(i, num_samples, rank)
+            reorder_list.extend(reorder)
+        reorder_list = np.array(reorder_list)
+
+    rank1 = rank_list[1]
     dist_fea_list = []
-    reorder_list = []
-    for i in range(rank):
-        reorder = np.arange(i, num_samples, rank)
-        reorder_list.extend(reorder)
-    reorder_list = np.array(reorder_list)
-
-    for rank_i in range(rank):
+    for rank_i in range(rank1):
         fea_path = "p1_fea_{}_{}.pt".format(data_idx, rank_i)
         dist_fea_list.append(torch.load(fea_path))
     dist_features = torch.cat(dist_fea_list, 1)
-    dist_features = dist_features.reshape((num_samples, emb_size))
-    diff = torch.sum(torch.abs(features - dist_features[reorder_list]))
-    print(features[:5, :5])
-    print(dist_features[reorder_list][:5, :5])
+    p2_features = dist_features.reshape((num_samples, emb_size))
+    if rank0 == -1:
+        diff = torch.sum(torch.abs(p1_features - p2_features[reorder_list]))
+    else:
+        diff = torch.sum(torch.abs(p1_features - p2_features))
+    print(p1_features[:5, :5])
+    #print(dist_features[reorder_list][:5, :5])
     #diff = torch.sum(torch.abs(features - dist_features))
 
     print("compare fea: --- \ndata idx: {} diff: {}\n------".format(data_idx, diff))
-    return features
+    return p1_features
 
-def compare_fea_grad(rank=-1, data_idx=0):
-    fea_path = "p0_fea_grad_{}.pt".format(data_idx)
-    features = torch.load(fea_path) 
-    num_samples = features.size()[0]
-    emb_size = features.size()[1]
-
+def compare_fea_grad(rank_list=[-1, 2], data_idx=0):
+    rank0 = rank_list[0]
     dist_fea_list = []
-    reorder_list = []
-    for i in range(rank):
-        reorder = np.arange(i, num_samples, rank)
-        reorder_list.extend(reorder)
-    reorder_list = np.array(reorder_list)
+    if rank0 == -1:
+        fea_path = "p0_fea_grad_{}.pt".format(data_idx)
+        features = torch.load(fea_path) 
+        num_samples, emb_size = features.size()
+        p0_features = features
+    else:
 
-    for rank_i in range(rank):
+        dist_fea_list = []
+        for rank_i in range(rank0):
+            fea_path = "p0_fea_grad_{}_{}.pt".format(data_idx, rank_i)
+            feas = torch.load(fea_path)
+            local_num_samples, emb_size = feas.size()
+            dist_fea_list.append(feas)
+        num_samples = local_num_samples * rank0
+        dist_features = torch.cat(dist_fea_list, 1)
+        dist_features = dist_features.reshape((num_samples, emb_size))
+        p0_features = dist_features
+
+    if rank0 == -1:
+        reorder_list = []
+        for i in range(rank0):
+            reorder = np.arange(i, num_samples, rank)
+            reorder_list.extend(reorder)
+        reorder_list = np.array(reorder_list)
+
+    rank1 = rank_list[1]
+    dist_fea_list = []
+    for rank_i in range(rank1):
         fea_path = "p1_fea_grad_{}_{}.pt".format(data_idx, rank_i)
         dist_fea_list.append(torch.load(fea_path))
     dist_features = torch.cat(dist_fea_list, 1)
     dist_features = dist_features.reshape((num_samples, emb_size))
+    p1_features = dist_features
 
-    partial_fea_list = []
-    for rank_i in range(rank):
-        fea_path = "p2_fea_grad_{}_{}.pt".format(data_idx, rank_i)
-        partial_fea_list.append(torch.load(fea_path))
+    diff1 = torch.sum(torch.abs(p1_features - p0_features))
 
-    partial_features = torch.cat(partial_fea_list, 1)
-    dist_features = dist_features.reshape((num_samples, emb_size))
-    partial_features = dist_features.reshape((num_samples, emb_size))
-    diff1 = torch.sum(torch.abs(features - dist_features[reorder_list]))
-    diff2 = torch.sum(torch.abs(dist_features - partial_features))
-    #diff = torch.sum(torch.abs(features - dist_features))
-
-    print("compare fea grad: --- \ndata idx: {} diff1: {}, diff2: {}\n------".format(data_idx, diff1, diff2))
-    return features
+    print("compare fea grad: --- \ndata idx: {} diff1: {}\n------".format(data_idx, diff1))
+    return p1_features
 
 
 def compare_theta(rank=-1, data_idx=0):
@@ -134,45 +162,52 @@ def compare_logits(rank=-1, data_idx=0):
     print("compare logits ----- \ndata idx: {} diff: {}".format(data_idx, diff))
     return features
 
-def compare_opt_weights(rank=-1, data_idx=0):
-    path = "local_fc_{}.pt".format(data_idx)
-    local_w = torch.load(path)
+def compare_opt_weights(rank_list=[-1, 2], data_idx=0):
+    rank0 = rank_list[0]
+    if rank0 == -1:
+        path = "local_fc_{}.pt".format(data_idx)
+        w0 = torch.load(path)
+    else:
+        dist_list = []
+        rank1 = rank_list[1]
+        for rank_i in range(rank1):
+            fw_w_path = "p0_fc_{}_{}.pt".format(data_idx, rank_i)
+            dist_list.append(torch.load(fw_w_path))
+        dist_w = torch.cat(dist_list, 0)
+        w0 = dist_w
+
     dist_list = []
-    for rank_i in range(rank):
-        fw_w_path = "softmax_fc_{}_{}.pt".format(data_idx, rank_i)
+    rank1 = rank_list[1]
+    for rank_i in range(rank1):
+        fw_w_path = "p1_fc_{}_{}.pt".format(data_idx, rank_i)
         dist_list.append(torch.load(fw_w_path))
-    dist_w = torch.cat(dist_list, 0)
+    p1_w = torch.cat(dist_list, 0)
 
-    diff = torch.sum(torch.abs(dist_w - local_w))
+    diff = torch.sum(torch.abs(p1_w - w0))
 
-    print("compare opt weights------ \n data idx: {} diff: {}".format(data_idx, diff))
+    print("compare fc opt weights------ \n data idx: {} diff: {}".format(data_idx, diff))
 
             
-def compare_opt_backbone(rank=-1, data_idx=0):
-    path = "local_backbone_{}.pt".format(data_idx)
-    local_backbone_w = torch.load(path)
-    path = "softmax_backbone_{}.pt".format(data_idx)
-    dist_backbone_w = torch.load(path)
-    path = "partial_backbone_{}.pt".format(data_idx)
-    partial_backbone_w = torch.load(path)
-    diff1 = torch.sum(torch.abs(local_backbone_w - dist_backbone_w))
-    diff2 = torch.sum(torch.abs(partial_backbone_w - dist_backbone_w))
+def compare_opt_backbone(data_idx=0):
+    path = "p0_backbone_{}.pt".format(data_idx)
+    p0_backbone_w = torch.load(path)
+    path = "p1_backbone_{}.pt".format(data_idx)
+    p1_backbone_w = torch.load(path)
+    diff1 = torch.sum(torch.abs(p0_backbone_w - p1_backbone_w))
 
-    print("compare opt weights------ \n data idx: {} diff1: {}, diff2: {}".format(data_idx, diff1, diff2))
-    print(local_backbone_w[0, 0, :, :])
-    print(dist_backbone_w[0, 0, :, :])
+    print("compare backbone opt weights------ \n data idx: {} diff1: {}".format(data_idx, diff1))
             
-    return local_backbone_w
+    return p0_backbone_w
 
 
 
 def main():
     #fc_w = compare_init_fc_weights(rank=4)
-    fea = compare_fea(rank=4, data_idx=0)
-    #compare_fea_grad(rank=4, data_idx=0)
+    fea = compare_fea(rank_list=[2, 2], data_idx=0)
+    compare_fea_grad(rank_list=[2, 2], data_idx=0)
     #logits = compare_logits(rank=4, data_idx=0)
-    compare_opt_weights(rank=4, data_idx=2)
-    compare_opt_backbone(rank=4, data_idx=2)
+    compare_opt_weights(rank_list=[2, 2], data_idx=2)
+    compare_opt_backbone(data_idx=2)
     #theta = compare_theta(rank=4, data_idx=0)
     #norm_w = F.normalize(fc_w)
     #out = F.linear(F.normalize(fea), norm_w)

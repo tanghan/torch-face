@@ -5,6 +5,7 @@ opt = edict()
 opt.network = edict()
 opt.network.emb_size = 512
 opt.network.input_shape = (3, 112, 112)
+opt.network.sample_rate = 1.
 
 opt.utils = edict()
 opt.utils.checkpoint = "/job_data/"
@@ -21,6 +22,19 @@ opt.dataset.trainset = [
         "megaface"
         ]
 
+opt.losses = edict()
+opt.losses.loss_type = [
+        "CircleLoss",
+        "CircleLoss",
+        ]
+opt.losses.loss_type = [
+        "CircleLoss",
+        "CircleLoss",
+        ]
+
+def circleloss(margin, gamma):
+
+
 
 def uniform_dataset(name, rec_path, idx_path, batch_size, num_samples, num_classes, **kwargs):
     dataset = edict()
@@ -34,12 +48,12 @@ def uniform_dataset(name, rec_path, idx_path, batch_size, num_samples, num_class
 uniform_dataset('glint360k', 
         '/cluster_home/data/public_face_data/glint360k/train.rec',
         '/cluster_home/data/public_face_data/glint360k/train.idx', 
-        batch_size=120,
+        batch_size=140,
         num_samples=17091657,
         num_classes=360232)
 uniform_dataset('megaface', 
         '/cluster_home/data/public_face_data/megaface/train.rec', 
         '/cluster_home/data/public_face_data/megaface/train.idx', 
-        batch_size=40,
+        batch_size=60,
         num_samples=4574213,
         num_classes=657078)

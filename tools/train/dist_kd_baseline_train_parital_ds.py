@@ -15,7 +15,7 @@ from core.modules.loss.head_def import HeadFactory
 from utils.callback_utils.utils_callbacks import CallBackVerification, CallBackLoggingList, CallBackModelCheckpoint
 from core.dataset.baseline_dataset import MXFaceDataset, DataLoaderX
 
-from core.modules.tail.dist_softmax import DistSoftmax
+from core.modules.tail.dist_partial_softmax import DistPartialSoftmax
 from torch.nn.utils import clip_grad_norm_
 from utils.utils_amp import MaxClipGradScaler
 from utils.logging_utils.utils_logging import AverageMeter, init_logging
@@ -23,7 +23,7 @@ import mpi4py.MPI as MPI
 
 class StudentBackbone(nn.Module):
 
-    def __init__(self, local_rank, world_size, s_emb_size, t_emb_size, fp16=True):
+    def __init__(self, local_rank, world_size, s_emb_size, t_emb_size, fp16=True, resume=False, pretrain_path="./"):
         super(StudentBackbone, self).__init__()
         self.out = None
         self.local_rank = local_rank
@@ -33,6 +33,11 @@ class StudentBackbone(nn.Module):
         self.s_backbone = None
         self.s_emb_size = s_emb_size
         self.t_emb_size = t_emb_size
+        self.resume = resume
+        self.pretrain_path = None
+        if self.resume:
+            self.pretrain_path = pretrain_path
+
 
         self.build_output_layer()
         self.build_backbone()
@@ -46,6 +51,11 @@ class StudentBackbone(nn.Module):
 
     def build_backbone(self):
         self.s_backbone = iresnet.iresnet100(dropout=0.0, fp16=self.fp16, num_features=self.s_emb_size)
+        if self.resume:
+            self.s_backbone.load_state_dict(torch.load(self.pretrain_path, map_location=torch.device(self.local_rank)))
+
+            logging.info("resume student network from {}".format(self.pretrain_path))
+
 
     def forward(self, x):
         logits = self.s_backbone(x)
@@ -61,27 +71,28 @@ def run_train(args, device_id, local_rank, world_size):
     fc_prefix = args.fc_prefix
     loss_type = args.loss_type
     resume = args.resume
+    pretrain_path = args.pretrain_path
     fp16 = args.fp16
 
     output_dir = args.output_dir
     assert os.path.isdir(output_dir)
     if args.resume:
-        assert weights_path is not None
+        assert pretrain_path is not None
         assert fc_prefix is not None
-        assert os.path.exists(weights_path)
+        assert os.path.exists(pretrain_path)
 
     train_loader, train_sampler, num_samples, num_classes = get_dataloader(args.rec_path, args.idx_path, local_rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
 
     init_logging(device_id, output_dir)
 
     num_images = num_samples
-    num_epoch = 20
+    num_epoch = 35
 
     total_step = num_images // (batch_size * num_epoch * world_size)
-    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}, use fp16: {}".format(num_samples,
-        num_classes, total_step, num_epoch, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume, fp16))
+    print("num samples: {}, num classes: {}, total step: {}, num epoch: {}, teacher weights path: {}, batch_size: {}, sample_rate: {}, backbone lr ratio: {}, loss type: {}, resume: {}, use fp16: {}, pretrain path: {}".format(num_samples,
+        num_classes, total_step, num_epoch, weights_path, batch_size, sample_rate, backbone_lr_ratio, loss_type, resume, fp16, pretrain_path))
 
-    trainer = Trainer(device_id, local_rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type, fp16=fp16)
+    trainer = Trainer(device_id, local_rank, world_size, num_classes=num_classes, num_images=num_images, batch_size=batch_size, num_epoch=num_epoch, sample_rate=sample_rate, weights_path=weights_path, fc_prefix=fc_prefix, backbone_lr_ratio=backbone_lr_ratio, resume=resume, loss_type=loss_type, fp16=fp16, pretrain_path=pretrain_path)
     callback_logging = CallBackLoggingList(50, device_id, total_step, batch_size, world_size, None)
     callback_checkpoint = CallBackModelCheckpoint(device_id, output_dir)
 
@@ -110,13 +121,14 @@ def get_dataloader(rec_path, idx_path, local_rank, batch_size=128, origin_prepro
 class Trainer():
 
     def __init__(self, device_id, local_rank, world_size, num_classes, num_images, batch_size=128, t_emb_size=512, s_emb_size=256, num_epoch=12, 
-            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface", fp16=True):
+            sample_rate=0.1, resume=True, weights_path="./", fc_prefix="./", backbone_lr_ratio=1., loss_type="cosface", fp16=True, pretrain_path="./"):
         self.device_id = device_id
         self.local_rank = local_rank
         self.world_size = world_size
         self.batch_size = batch_size
         self.total_batch_size = self.batch_size * self.world_size
         self.num_classes = num_classes
+        self.resume = resume
 
         self.device = "cuda:{}".format(local_rank)
         self.module_fc = None
@@ -129,8 +141,8 @@ class Trainer():
         self.total_step = self.num_images // self.total_batch_size * self.num_epoch
         #self.decay_epoch = [30, 45, 55, 60, 65, 70]
         #self.decay_epoch = [8, 12, 15, 18]
-        self.decay_epoch = [8, 12, 15, 18]
-        #self.decay_epoch = [16, 24, 30, 33]
+        #self.decay_epoch = [8, 12, 15, 18]
+        self.decay_epoch = [16, 24, 30, 33]
         #self.decay_epoch = [32, 48, 54, 58]
         #self.decay_epoch = [6, 8, 10, 11]
         self.sample_rate = sample_rate
@@ -142,6 +154,7 @@ class Trainer():
         self.s_emb_size = s_emb_size
 
         self.backbone_lr_ratio = backbone_lr_ratio
+        self.pretrain_path = pretrain_path
         self.loss_type = loss_type
         self.head_conf = "config/head_conf.yaml"
         self.head_factory = HeadFactory(self.local_rank, self.world_size, self.loss_type, self.head_conf)
@@ -154,7 +167,7 @@ class Trainer():
         self.t_backbone.load_state_dict(torch.load(self.weights_path, map_location=torch.device(self.local_rank)))
 
         logging.info("resume network from {}".format(self.weights_path))
-        s_backbone = StudentBackbone(self.local_rank, self.world_size, t_emb_size=self.t_emb_size, s_emb_size=self.s_emb_size, fp16=self.fp16)
+        s_backbone = StudentBackbone(self.local_rank, self.world_size, t_emb_size=self.t_emb_size, s_emb_size=self.s_emb_size, fp16=self.fp16, resume=self.resume, pretrain_path=self.pretrain_path)
 
         self.t_backbone = self.t_backbone.to(self.device)
         s_backbone = s_backbone.to(self.device)
@@ -171,9 +184,9 @@ class Trainer():
 
     def set_tail(self, loss_fn):
 
-        self.module_fc = DistSoftmax(
-            rank=self.device_id, local_rank=self.local_rank, world_size=self.world_size, resume=False,
-            batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes,
+        self.module_fc = DistPartialSoftmax(
+            rank=self.device_id, local_rank=self.local_rank, world_size=self.world_size, resume=self.resume,
+            batch_size=self.batch_size, margin_softmax=loss_fn, num_classes=self.num_classes, sample_rate=self.sample_rate,
             embedding_size=self.s_emb_size)
 
     def set_optimizer(self, lr):
@@ -218,9 +231,9 @@ class Trainer():
             s_features, kd_features = self.s_backbone(img)
             kd_features = F.normalize(kd_features)
             
-            loss_v, loss_g = self.module_fc(s_features, label)
+            loss_v, loss_g = self.module_fc(s_features, label, self.opt_pfc)
             kd_loss = (1. - (t_features * kd_features).sum(dim=1)).mean()
-            loss_v += kd_loss
+            loss_v += 0.1 * kd_loss
                     
             if loss_g is not None:
                 loss_v += loss_v + torch.mean(loss_g) / self.world_size
@@ -239,6 +252,7 @@ class Trainer():
                 self.opt_backbone.step()
 
             self.opt_pfc.step()
+            self.module_fc.update()
             self.opt_backbone.zero_grad()
             self.opt_pfc.zero_grad()
             loss_log.update(loss_v.detach(), 1)
@@ -290,6 +304,7 @@ if __name__ == "__main__":
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--loss_type", type=str, default="arcface", help="")
     parser.add_argument("--fp16", action="store_true", help="")
+    parser.add_argument("--pretrain_path", type=str, default=None, help="")
     parser.add_argument(
         "--dist-url",
         type=str,

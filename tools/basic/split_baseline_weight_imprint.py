@@ -22,14 +22,14 @@ def parse_mean_fea_path(weights_path, fea_prefix="mean_fea_"):
         imprint_list.append(imprint_dict[i])
     return imprint_list
 
-def combine_imprint_list(imprint_list):
+def combine_imprint_list(imprint_list, emb_size):
     print(imprint_list)
     feas = [] 
     for path_idx, path in enumerate(imprint_list):
         #with open(path, "rb") as fr:
         #    data_raw = fr.read()
         fea = np.fromfile(path, dtype=np.float32)
-        fea = fea.reshape(-1, 512)
+        fea = fea.reshape(-1, emb_size)
         feas.append(fea)
     feas = np.concatenate(feas)
     return feas
@@ -56,11 +56,12 @@ def main(args):
     weights_dir = args.weights_dir
     num_classes = args.num_classes
     world_size = args.world_size
+    emb_size = args.emb_size
     assert os.path.isdir(output_dir)
     assert os.path.isdir(weights_dir)
 
     imprint_list = parse_mean_fea_path(weights_dir)
-    feas = combine_imprint_list(imprint_list)
+    feas = combine_imprint_list(imprint_list, emb_size)
     save_rank_weights(feas, num_classes, world_size, prefix=output_dir)
 
 
@@ -70,6 +71,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default=None, help="")
     parser.add_argument("--num_classes", type=int, default=None, help="")
     parser.add_argument("--world_size", type=int, default=None, help="")
+    parser.add_argument("--emb_size", type=int, default=512, help="")
     args = parser.parse_args()
     main(args)
 

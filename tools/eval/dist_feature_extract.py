@@ -161,8 +161,9 @@ def run(args, device_id, rank, world_size):
     batch_size = args.batch_size
     fp16 = args.fp16
     norm = args.norm
+    emb_size = args.emb_size
 
-    test = Eval(rank, weight_path=args.weight_path, emb_size=512, fp16=fp16)
+    test = Eval(rank, weight_path=args.weight_path, emb_size=emb_size, fp16=fp16)
     if dataset_type == "rec":
         dataloader, total_num = build_rec_dataset(dataset_dict[dataset_name][0],
                 dataset_dict[dataset_name][1], rank, batch_size=batch_size, origin_prepro=args.origin_prepro)
@@ -213,7 +214,7 @@ def run(args, device_id, rank, world_size):
         #print(embed_num, embed.shape)
         embed = embed.cpu().numpy().astype(np.float32)
         embed = embed.reshape(-1)
-        raw_data = struct.pack("f" * 512, *embed)
+        raw_data = struct.pack("f" * emb_size, *embed)
         fw.write(raw_data)
     fw.close()
 
@@ -264,6 +265,7 @@ if __name__ == "__main__":
     parser.add_argument("--origin_prepro", action="store_true", help="")
     parser.add_argument("--fp16", action="store_true", help="")
     parser.add_argument("--norm", action="store_true", help="")
+    parser.add_argument("--emb_size", type=int, default=512, help="")
     parser.add_argument(
         "--dist-url",
         type=str,

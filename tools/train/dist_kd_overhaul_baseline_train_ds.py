@@ -47,9 +47,7 @@ def get_margin_from_BN(bn, rank=0):
         else:
             margin_ = -3 * s
         margin.append(margin_)
-        #if rank == 0:
-        #    print(np.max(np.abs(margin_)))
-
+        
     return torch.FloatTensor(margin).to(std.device)
 
 def build_feature_connector(t_channel, s_channel):
@@ -280,7 +278,7 @@ class Trainer():
         self.network_init()
         self.set_loss()
         self.set_tail(loss_fn=self.loss_fn)
-        self.set_optimizer(lr=0.1)
+        self.set_optimizer(lr=0.01)
 
     
     def train(self, epoch, global_step, train_loader, grad_amp, loss_log, kd_loss_log,
@@ -299,7 +297,7 @@ class Trainer():
                 kd_loss = (1. - (t_logits * kd_logits).sum(dim=1).mean())
                 loss_v += kd_loss
             distill_loss = distill_loss.sum() / self.world_size / self.batch_size / 10000
-            print("rank: {}, distill_loss: {}, loss_v: {}".format(self.device_id, distill_loss, loss_v))
+            #print("rank: {}, distill_loss: {}, loss_v: {}".format(self.device_id, distill_loss, loss_v))
             loss_v += distill_loss
                     
             if loss_g is not None:
